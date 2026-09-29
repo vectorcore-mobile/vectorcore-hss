@@ -2,7 +2,6 @@ package cx
 
 import (
 	"context"
-	"strings"
 	"time"
 
 	"github.com/fiorix/go-diameter/v4/diam"
@@ -14,18 +13,6 @@ import (
 	"github.com/svinson1121/vectorcore-hss/internal/repository"
 )
 
-// sipURIUser extracts the user part from a SIP URI.
-// "sip:334201283@ims.mnc435.mcc311.3gppnetwork.org" → "334201283"
-// Plain strings (IMSI, bare MSISDN) are returned unchanged.
-func sipURIUser(identity string) string {
-	s := strings.TrimPrefix(identity, "sip:")
-	s = strings.TrimPrefix(s, "tel:")
-	if at := strings.IndexByte(s, '@'); at >= 0 {
-		s = s[:at]
-	}
-	return s
-}
-
 func (h *Handlers) LIR(conn diam.Conn, msg *diam.Message) (*diam.Message, error) {
 	var lir LIR
 	if err := msg.Unmarshal(&lir); err != nil {
@@ -36,7 +23,7 @@ func (h *Handlers) LIR(conn diam.Conn, msg *diam.Message) (*diam.Message, error)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	identity := sipURIUser(string(lir.PublicIdentity))
+	identity := normalizeMSISDN(string(lir.PublicIdentity))
 
 	// Try MSISDN first, then IMSI.
 	sub, err := h.store.GetIMSSubscriberByMSISDN(ctx, identity)

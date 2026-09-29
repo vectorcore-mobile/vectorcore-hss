@@ -112,6 +112,11 @@ func (s *Server) listIMSSubscribers(ctx context.Context, input *IMSSubscriberLis
 }
 
 func (s *Server) createIMSSubscriber(ctx context.Context, input *IMSSubscriberCreateInput) (*IMSSubscriberOutput, error) {
+	msisdn, err := normalizeProvisionedMSISDN(input.Body.MSISDN)
+	if err != nil {
+		return nil, huma.Error422UnprocessableEntity(err.Error(), err)
+	}
+	input.Body.MSISDN = msisdn
 	input.Body.LastModified = time.Now().UTC().Format(time.RFC3339)
 	if err := s.db.WithContext(ctx).Create(input.Body).Error; err != nil {
 		return nil, huma.Error500InternalServerError("db error", err)
@@ -151,6 +156,11 @@ func (s *Server) updateIMSSubscriber(ctx context.Context, input *IMSSubscriberUp
 		}
 		return nil, huma.Error500InternalServerError("db error", err)
 	}
+	msisdn, err := normalizeProvisionedMSISDN(input.Body.MSISDN)
+	if err != nil {
+		return nil, huma.Error422UnprocessableEntity(err.Error(), err)
+	}
+	input.Body.MSISDN = msisdn
 	input.Body.LastModified = time.Now().UTC().Format(time.RFC3339)
 	input.Body.IMSSubscriberID = input.ID
 	if err := s.db.WithContext(ctx).Save(input.Body).Error; err != nil {

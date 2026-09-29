@@ -68,15 +68,23 @@ func normalizeIMSI(privateID string) string {
 
 // normalizeMSISDN extracts a bare MSISDN from a Cx public identity.
 // "sip:13135551234@ims.mnc435.mcc311.3gppnetwork.org" → "13135551234"
-// "tel:13135551234" → "13135551234"
+// "sip:+13135551234@ims.mnc435.mcc311.3gppnetwork.org;user=phone" → "13135551234"
+// "tel:+13135551234;phone-context=ims.mnc435.mcc311.3gppnetwork.org" → "13135551234"
 // "13135551234" → "13135551234"
+//
+// The "+" of a global tel/SIP number (RFC 3966) is URI syntax, not part of the
+// MSISDN, which is stored as digits only (TS 23.003 §3.3, TBCD in TS 29.329
+// §6.3.2).
 func normalizeMSISDN(publicID string) string {
 	s := strings.TrimPrefix(publicID, "sip:")
 	s = strings.TrimPrefix(s, "tel:")
-	if at := strings.IndexByte(s, '@'); at > 0 {
-		return s[:at]
+	if at := strings.IndexByte(s, '@'); at >= 0 {
+		s = s[:at]
 	}
-	return s
+	if semi := strings.IndexByte(s, ';'); semi >= 0 {
+		s = s[:semi]
+	}
+	return strings.TrimPrefix(s, "+")
 }
 
 // imsIMSDomain formats the IMS home domain for this PLMN.

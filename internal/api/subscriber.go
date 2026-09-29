@@ -116,6 +116,9 @@ func (s *Server) createSubscriber(ctx context.Context, input *SubscriberCreateIn
 	if err := validateAccessRestrictionData(input.Body); err != nil {
 		return nil, huma.Error422UnprocessableEntity(err.Error(), err)
 	}
+	if err := normalizeProvisionedMSISDNPtr(input.Body.MSISDN); err != nil {
+		return nil, huma.Error422UnprocessableEntity(err.Error(), err)
+	}
 	input.Body.LastModified = time.Now().UTC().Format(time.RFC3339)
 	if err := s.db.WithContext(ctx).Create(input.Body).Error; err != nil {
 		return nil, huma.Error500InternalServerError("db error", err)
@@ -160,6 +163,9 @@ func (s *Server) updateSubscriber(ctx context.Context, input *SubscriberUpdateIn
 		return nil, huma.Error422UnprocessableEntity(err.Error(), err)
 	}
 	if err := validateAccessRestrictionData(input.Body); err != nil {
+		return nil, huma.Error422UnprocessableEntity(err.Error(), err)
+	}
+	if err := normalizeProvisionedMSISDNPtr(input.Body.MSISDN); err != nil {
 		return nil, huma.Error422UnprocessableEntity(err.Error(), err)
 	}
 	input.Body.LastModified = time.Now().UTC().Format(time.RFC3339)
