@@ -3,6 +3,7 @@ package rx
 import (
 	"context"
 	"fmt"
+	"hash/fnv"
 	"strings"
 	"time"
 
@@ -118,7 +119,7 @@ func (h *Handlers) AAR(conn diam.Conn, msg *diam.Message) (*diam.Message, error)
 			}
 		}
 		rules = append(rules, bearerRule{
-			name:          fmt.Sprintf("rx-%s-%d", sessionID[:min(16, len(sessionID))], mc.MediaComponentNumber),
+			name:          rxChargingRuleName(sessionID, uint32(mc.MediaComponentNumber)),
 			qci:           uint32(qci),
 			bwDL:          bwDL,
 			bwUL:          bwUL,
@@ -392,9 +393,14 @@ func extractSubscriberID(ids []SubscriptionID) string {
 	return ""
 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
+// rxChargingRuleName names the Gx rule for one media component of one Rx
+// session. The P-GW keys rules by name within a Gx session, so the name must
+// be unique per Rx session: every P-CSCF Session-Id shares the same prefix
+// (e.g. "pcscf.ims.mnc099…"), and a prefix-based name made each new Rx
+// session modify the previous session's bearer instead of creating its own.
+// A re-AAR on the same Rx session keeps the same name and updates its rule.
+func rxChargingRuleName(sessionID string, mediaComponentNumber uint32) string {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(sessionID))
+	return fmt.Sprintf("rx-%08x-%d", h.Sum32(), mediaComponentNumber)
 }

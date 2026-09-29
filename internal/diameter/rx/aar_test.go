@@ -128,3 +128,40 @@ func rxFlowInformationValues(t *testing.T, flowAVP *diam.AVP) (string, uint32) {
 
 	return desc, dir
 }
+
+// Field capture: every Rx session produced the Gx rule "rx-pcscf.ims.mnc099-1"
+// because the name used only the first 16 characters of the Session-Id. The
+// IMS registration AAR installed it (QCI 5), the first call's AAR re-used the
+// name so the P-GW modified that bearer to QCI 1 (the UE rejected, ESM #44),
+// and the call's STR then deleted the signalling bearer.
+func TestRxChargingRuleNameUniquePerRxSession(t *testing.T) {
+	const (
+		registration = "pcscf.ims.mnc099.mcc246.3gppnetwork.org;3943309833;37"
+		call1        = "pcscf.ims.mnc099.mcc246.3gppnetwork.org;3943309833;39"
+		otherUECall1 = "pcscf.ims.mnc099.mcc246.3gppnetwork.org;3943309833;40"
+		call2        = "pcscf.ims.mnc099.mcc246.3gppnetwork.org;3943309833;41"
+	)
+	names := map[string]string{}
+	for _, sid := range []string{registration, call1, otherUECall1, call2} {
+		name := rxChargingRuleName(sid, 1)
+		if prev, dup := names[name]; dup {
+			t.Fatalf("Rx sessions %q and %q share Gx rule name %q", prev, sid, name)
+		}
+		names[name] = sid
+		if name == "rx-pcscf.ims.mnc099-1" {
+			t.Fatalf("rule name %q still derived from the shared Session-Id prefix", name)
+		}
+	}
+
+	// A re-AAR on the same Rx session must update its own rule, not add one.
+	if a, b := rxChargingRuleName(call1, 1), rxChargingRuleName(call1, 1); a != b {
+		t.Fatalf("same Rx session and component gave different names %q and %q", a, b)
+	}
+	// Media components of one session need their own rules.
+	if a, b := rxChargingRuleName(call1, 1), rxChargingRuleName(call1, 2); a == b {
+		t.Fatalf("media components 1 and 2 share rule name %q", a)
+	}
+	if got := rxChargingRuleName(call1, 1); !strings.HasPrefix(got, "rx-") || !strings.HasSuffix(got, "-1") {
+		t.Fatalf("rule name %q, want rx-<hash>-<media component>", got)
+	}
+}
