@@ -33,11 +33,11 @@ func (h *Handlers) AAR(conn diam.Conn, msg *diam.Message) (*diam.Message, error)
 	h.log.Debug("rx: AAR", zap.String("session", sessionID), zap.String("subscriber", identity),
 		zap.Int("media_components", len(aar.MediaComponents)))
 
-	// Look up the subscriber's active Gx session. The P-CSCF may send any
-	// Subscription-ID-Type (IMSI, E164, or SIP-URI) and the local part of a
-	// SIP URI may be either the IMSI or the MSISDN. GetServingAPNByIdentity
-	// matches against both columns in a single query.
-	gxRec, err := h.store.GetServingAPNByIdentity(ctx, identity)
+	// Bind to the Gx session owning the AAR's UE IP (TS 29.213 §4). The
+	// P-CSCF may send any Subscription-ID-Type (IMSI, E164, or SIP-URI) and
+	// the local part of a SIP URI may be either the IMSI or the MSISDN; the
+	// identity-only lookup is the fallback when no UE IP matches.
+	gxRec, binding, err := bindRxToGxSession(ctx, h.store, identity, []byte(aar.FramedIPAddress))
 	if err == repository.ErrNotFound {
 		h.log.Warn("rx: AAR no active Gx session for subscriber", zap.String("subscriber", identity))
 		// Return success anyway — voice call can still proceed without dedicated bearer.
@@ -52,6 +52,10 @@ func (h *Handlers) AAR(conn diam.Conn, msg *diam.Message) (*diam.Message, error)
 		h.log.Warn("rx: AAR Gx session has no PCRF session or PGW peer", zap.String("subscriber", identity))
 		return buildRxAnswer(msg, aar.SessionID, h.originHost, h.originRealm), nil
 	}
+
+	h.log.Debug("rx: AAR bound to Gx session", zap.String("subscriber", identity),
+		zap.String("binding", binding), zap.String("gx_session", *gxRec.PCRFSessionID),
+		zap.String("apn", gxRec.APNName))
 
 	pgwPeer := *gxRec.ServingPGWPeer
 	pgwRealm := ""
