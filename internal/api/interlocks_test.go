@@ -23,6 +23,11 @@ func newTestServer(t *testing.T) *Server {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
+	// The shared in-memory DB lives until its last connection closes; close
+	// it so a repeated run (-count=N) starts empty.
+	if sqlDB, err := db.DB(); err == nil {
+		t.Cleanup(func() { sqlDB.Close() })
+	}
 	if err := db.AutoMigrate(models.AllModels()...); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}

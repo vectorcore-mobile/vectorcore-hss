@@ -2,18 +2,45 @@ package api
 
 import (
 	"context"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/svinson1121/vectorcore-hss/internal/models"
 )
 
+// idrRecorder records IDRs. updateSubscriber sends them from a goroutine,
+// so tests must read the calls through waitCalls, not directly.
 type idrRecorder struct {
+	mu    sync.Mutex
 	imsis []string
 }
 
 func (r *idrRecorder) SendIDRByIMSI(_ context.Context, imsi string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.imsis = append(r.imsis, imsi)
 	return nil
+}
+
+// waitCalls returns the recorded IMSIs once want calls have arrived, or
+// whatever arrived by the timeout. With want == 0 it waits the full settle
+// period so a late IDR is still caught.
+func (r *idrRecorder) waitCalls(want int) []string {
+	timeout := 2 * time.Second
+	if want == 0 {
+		timeout = 200 * time.Millisecond
+	}
+	deadline := time.Now().Add(timeout)
+	for {
+		r.mu.Lock()
+		got := append([]string(nil), r.imsis...)
+		r.mu.Unlock()
+		if (want > 0 && len(got) >= want) || time.Now().After(deadline) {
+			return got
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 }
 
 func TestUpdateSubscriberSendsIDROnAccessRestrictionChange(t *testing.T) {
@@ -42,8 +69,8 @@ func TestUpdateSubscriberSendsIDROnAccessRestrictionChange(t *testing.T) {
 		t.Fatalf("update subscriber: %v", err)
 	}
 
-	if len(idr.imsis) != 1 || idr.imsis[0] != sub.IMSI {
-		t.Fatalf("IDR calls = %#v, want [%q]", idr.imsis, sub.IMSI)
+	if calls := idr.waitCalls(1); len(calls) != 1 || calls[0] != sub.IMSI {
+		t.Fatalf("IDR calls = %#v, want [%q]", calls, sub.IMSI)
 	}
 }
 
@@ -71,8 +98,8 @@ func TestUpdateSubscriberSkipsIDRWhenAccessRestrictionUnchanged(t *testing.T) {
 		t.Fatalf("update subscriber: %v", err)
 	}
 
-	if len(idr.imsis) != 0 {
-		t.Fatalf("unexpected IDR calls: %#v", idr.imsis)
+	if calls := idr.waitCalls(0); len(calls) != 0 {
+		t.Fatalf("unexpected IDR calls: %#v", calls)
 	}
 }
 
@@ -104,8 +131,8 @@ func TestUpdateSubscriberSkipsIDRWhenDisabled(t *testing.T) {
 		t.Fatalf("update subscriber: %v", err)
 	}
 
-	if len(idr.imsis) != 0 {
-		t.Fatalf("unexpected IDR calls: %#v", idr.imsis)
+	if calls := idr.waitCalls(0); len(calls) != 0 {
+		t.Fatalf("unexpected IDR calls: %#v", calls)
 	}
 }
 
@@ -307,7 +334,7 @@ func TestUpdateSubscriberSendsIDROnSubscriberStatusChange(t *testing.T) {
 		t.Fatalf("update subscriber: %v", err)
 	}
 
-	if len(idr.imsis) != 1 || idr.imsis[0] != sub.IMSI {
-		t.Fatalf("IDR calls = %#v, want [%q]", idr.imsis, sub.IMSI)
+	if calls := idr.waitCalls(1); len(calls) != 1 || calls[0] != sub.IMSI {
+		t.Fatalf("IDR calls = %#v, want [%q]", calls, sub.IMSI)
 	}
 }
