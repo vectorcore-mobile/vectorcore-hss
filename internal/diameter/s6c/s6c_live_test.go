@@ -23,7 +23,10 @@ const (
 // TestLiveSRISMByMSISDN exercises a real S6c SRI-SM transaction against a
 // running HSS. It is skipped unless HSS_S6C_LIVE_ADDR is set.
 func TestLiveSRISMByMSISDN(t *testing.T) {
-	addr := getenvDefault("HSS_S6C_LIVE_ADDR", "10.90.250.32:3868")
+	addr := os.Getenv("HSS_S6C_LIVE_ADDR")
+	if addr == "" {
+		t.Skip("set HSS_S6C_LIVE_ADDR (e.g. 10.90.250.32:3868) to run against a live HSS")
+	}
 
 	if err := LoadMSISDNSupplement(); err != nil {
 		t.Fatalf("LoadMSISDNSupplement: %v", err)
