@@ -435,7 +435,7 @@ func (s *Store) UpsertServingAPN(ctx context.Context, record *models.ServingAPN)
 	return s.db.WithContext(ctx).
 		Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "subscriber_id"}, {Name: "apn"}},
-			DoUpdates: clause.AssignmentColumns([]string{"apn_name", "pcrf_session_id", "ip_version", "ue_ip", "serving_pgw", "serving_pgw_timestamp", "serving_pgw_realm", "serving_pgw_peer", "last_modified"}),
+			DoUpdates: clause.AssignmentColumns([]string{"apn_name", "pcrf_session_id", "ip_version", "ue_ip", "ue_ipv6_prefix", "serving_pgw", "serving_pgw_timestamp", "serving_pgw_realm", "serving_pgw_peer", "last_modified"}),
 		}).
 		Create(record).Error
 }
@@ -527,6 +527,17 @@ func (s *Store) GetServingAPNByIdentity(ctx context.Context, identity string) (*
 func (s *Store) GetServingAPNByUEIP(ctx context.Context, ueIP string) (*models.ServingAPN, error) {
 	var rec models.ServingAPN
 	if err := s.db.WithContext(ctx).Where("ue_ip = ?", ueIP).First(&rec).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, repository.ErrNotFound
+		}
+		return nil, err
+	}
+	return &rec, nil
+}
+
+func (s *Store) GetServingAPNByUEIPv6Prefix(ctx context.Context, prefix string) (*models.ServingAPN, error) {
+	var rec models.ServingAPN
+	if err := s.db.WithContext(ctx).Where("ue_ipv6_prefix = ?", prefix).First(&rec).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, repository.ErrNotFound
 		}

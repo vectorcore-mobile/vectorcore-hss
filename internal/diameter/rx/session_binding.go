@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 
+	"github.com/svinson1121/vectorcore-hss/internal/diameter/avputil"
 	"github.com/svinson1121/vectorcore-hss/internal/models"
 	"github.com/svinson1121/vectorcore-hss/internal/repository"
 )
@@ -12,6 +13,7 @@ import (
 // needs.
 type rxBindingStore interface {
 	GetServingAPNByUEIP(ctx context.Context, ueIP string) (*models.ServingAPN, error)
+	GetServingAPNByUEIPv6Prefix(ctx context.Context, prefix string) (*models.ServingAPN, error)
 	GetServingAPNByIdentity(ctx context.Context, identity string) (*models.ServingAPN, error)
 	GetSubscriberByIMSI(ctx context.Context, imsi string) (*models.Subscriber, error)
 	GetSubscriberByMSISDN(ctx context.Context, msisdn string) (*models.Subscriber, error)
@@ -19,20 +21,31 @@ type rxBindingStore interface {
 
 const (
 	rxBindingUEIP     = "ue-ip"
+	rxBindingUEIPv6   = "ue-ipv6"
 	rxBindingIdentity = "identity"
 )
 
 // bindRxToGxSession finds the Gx session an AAR's rules belong to. Per TS
 // 29.213 §4 the binding key is the UE IP address: a subscriber with both an
 // internet and an IMS PDN has two Gx sessions, and only the one owning the
-// AAR's Framed-IP-Address may carry the media bearers. The identity-only
-// lookup, which returns the subscriber's oldest session, is kept as a
-// fallback for an AAR without a usable UE address.
-func bindRxToGxSession(ctx context.Context, store rxBindingStore, identity string, framedIP []byte) (*models.ServingAPN, string, error) {
+// AAR's Framed-IP-Address, or the /64 of its Framed-IPv6-Prefix, may carry
+// the media bearers. The identity-only lookup, which returns the
+// subscriber's oldest session, is kept as a fallback for an AAR without a
+// usable UE address.
+func bindRxToGxSession(ctx context.Context, store rxBindingStore, identity string, framedIP, framedIPv6Prefix []byte) (*models.ServingAPN, string, error) {
 	if len(framedIP) == net.IPv4len {
 		rec, err := store.GetServingAPNByUEIP(ctx, net.IP(framedIP).String())
-		if err == nil && rec.PCRFSessionID != nil && rec.ServingPGWPeer != nil && belongsToIdentity(ctx, store, rec, identity) {
+		if err == nil && usableBinding(ctx, store, rec, identity) {
 			return rec, rxBindingUEIP, nil
+		}
+		if err != nil && err != repository.ErrNotFound {
+			return nil, "", err
+		}
+	}
+	if key, ok := avputil.IPv6BindingKey(framedIPv6Prefix); ok {
+		rec, err := store.GetServingAPNByUEIPv6Prefix(ctx, key)
+		if err == nil && usableBinding(ctx, store, rec, identity) {
+			return rec, rxBindingUEIPv6, nil
 		}
 		if err != nil && err != repository.ErrNotFound {
 			return nil, "", err
@@ -40,6 +53,10 @@ func bindRxToGxSession(ctx context.Context, store rxBindingStore, identity strin
 	}
 	rec, err := store.GetServingAPNByIdentity(ctx, identity)
 	return rec, rxBindingIdentity, err
+}
+
+func usableBinding(ctx context.Context, store rxBindingStore, rec *models.ServingAPN, identity string) bool {
+	return rec.PCRFSessionID != nil && rec.ServingPGWPeer != nil && belongsToIdentity(ctx, store, rec, identity)
 }
 
 // belongsToIdentity guards against a stale serving_apn row for a reused UE

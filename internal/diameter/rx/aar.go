@@ -38,7 +38,7 @@ func (h *Handlers) AAR(conn diam.Conn, msg *diam.Message) (*diam.Message, error)
 	// P-CSCF may send any Subscription-ID-Type (IMSI, E164, or SIP-URI) and
 	// the local part of a SIP URI may be either the IMSI or the MSISDN; the
 	// identity-only lookup is the fallback when no UE IP matches.
-	gxRec, binding, err := bindRxToGxSession(ctx, h.store, identity, []byte(aar.FramedIPAddress))
+	gxRec, binding, err := bindRxToGxSession(ctx, h.store, identity, []byte(aar.FramedIPAddress), avputil.FramedIPv6PrefixRaw(msg))
 	if err == repository.ErrNotFound {
 		h.log.Warn("rx: AAR no active Gx session for subscriber", zap.String("subscriber", identity))
 		// Return success anyway — voice call can still proceed without dedicated bearer.

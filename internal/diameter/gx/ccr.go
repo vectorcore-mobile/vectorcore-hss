@@ -37,9 +37,17 @@ func (h *Handlers) CCR(conn diam.Conn, msg *diam.Message) (*diam.Message, error)
 	if len(ccr.FramedIPAddress) == 4 {
 		ueIP = net.IP([]byte(ccr.FramedIPAddress)).String()
 	}
-	if ueIP == "" {
-		if stored, err := h.store.GetServingAPNBySession(ctx, sessionID); err == nil && stored.UEIP != nil {
-			ueIP = *stored.UEIP
+	// Framed-IPv6-Prefix (RFC 3162) gives the PDN's IPv6 /64, the Rx binding
+	// key for IPv6 (TS 29.213 §4).
+	ueIPv6Prefix, _ := avputil.IPv6BindingKey(avputil.FramedIPv6PrefixRaw(msg))
+	if ueIP == "" || ueIPv6Prefix == "" {
+		if stored, err := h.store.GetServingAPNBySession(ctx, sessionID); err == nil {
+			if ueIP == "" && stored.UEIP != nil {
+				ueIP = *stored.UEIP
+			}
+			if ueIPv6Prefix == "" && stored.UEIPv6Prefix != nil {
+				ueIPv6Prefix = *stored.UEIPv6Prefix
+			}
 		}
 	}
 
@@ -189,6 +197,10 @@ func (h *Handlers) CCR(conn diam.Conn, msg *diam.Message) (*diam.Message, error)
 		if ueIP != "" {
 			ueIPPtr = &ueIP
 		}
+		var ueIPv6PrefixPtr *string
+		if ueIPv6Prefix != "" {
+			ueIPv6PrefixPtr = &ueIPv6Prefix
+		}
 		apnID := 0
 		ipVersion := 0
 		if apnRecord != nil {
@@ -202,6 +214,7 @@ func (h *Handlers) CCR(conn diam.Conn, msg *diam.Message) (*diam.Message, error)
 			PCRFSessionID:       &sessionID,
 			IPVersion:           ipVersion,
 			UEIP:                ueIPPtr,
+			UEIPv6Prefix:        ueIPv6PrefixPtr,
 			ServingPGW:          &pgw,
 			ServingPGWTimestamp: &now,
 			ServingPGWRealm:     &pgwRealm,

@@ -23,6 +23,15 @@ func (s *bindingStore) GetServingAPNByUEIP(_ context.Context, ueIP string) (*mod
 	return nil, repository.ErrNotFound
 }
 
+func (s *bindingStore) GetServingAPNByUEIPv6Prefix(_ context.Context, prefix string) (*models.ServingAPN, error) {
+	for i := range s.serving {
+		if s.serving[i].UEIPv6Prefix != nil && *s.serving[i].UEIPv6Prefix == prefix {
+			return &s.serving[i], nil
+		}
+	}
+	return nil, repository.ErrNotFound
+}
+
 // GetServingAPNByIdentity mirrors the store: the subscriber's oldest active
 // session, whatever its APN.
 func (s *bindingStore) GetServingAPNByIdentity(ctx context.Context, identity string) (*models.ServingAPN, error) {
@@ -115,7 +124,7 @@ func TestBindRxToGxSession(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rec, binding, err := bindRxToGxSession(context.Background(), newCaptureBindingStore(), tt.identity, tt.framedIP)
+			rec, binding, err := bindRxToGxSession(context.Background(), newCaptureBindingStore(), tt.identity, tt.framedIP, nil)
 			if err != nil {
 				t.Fatalf("bindRxToGxSession: %v", err)
 			}
@@ -130,8 +139,55 @@ func TestBindRxToGxSession(t *testing.T) {
 }
 
 func TestBindRxToGxSessionUnknownSubscriber(t *testing.T) {
-	_, _, err := bindRxToGxSession(context.Background(), newCaptureBindingStore(), "001010000000001", nil)
+	_, _, err := bindRxToGxSession(context.Background(), newCaptureBindingStore(), "001010000000001", nil, nil)
 	if err != repository.ErrNotFound {
 		t.Fatalf("err got %v, want ErrNotFound", err)
+	}
+}
+
+// framedIPv6Prefix encodes a Framed-IPv6-Prefix value (RFC 3162 §2.3).
+func framedIPv6Prefix(addr string, prefixLen int) []byte {
+	ip := net.ParseIP(addr).To16()
+	n := (prefixLen + 7) / 8
+	return append([]byte{0, byte(prefixLen)}, ip[:n]...)
+}
+
+// H4: an IPv6-only IMS PDN has no Framed-IP-Address; the AAR carries the
+// UE's IPv6 address and must still bind to that PDN's Gx session, not to
+// the subscriber's oldest (internet) session.
+func TestBindRxToGxSessionIPv6(t *testing.T) {
+	store := &bindingStore{
+		subscribers: []models.Subscriber{{SubscriberID: 7, IMSI: "246990200000011", MSISDN: strPtr("200000011")}},
+		serving: []models.ServingAPN{
+			servingRow(7, "internet", "10.45.0.27", "smf;1790704676;50;app_gx"),
+			{
+				SubscriberID:   7,
+				APNName:        "ims",
+				UEIPv6Prefix:   strPtr("2001:db8:46:1a::/64"),
+				PCRFSessionID:  strPtr("smf;1790704676;51;app_gx"),
+				ServingPGWPeer: strPtr("smf.epc.mnc099.mcc246.3gppnetwork.org"),
+			},
+		},
+	}
+	ctx := context.Background()
+
+	rec, binding, err := bindRxToGxSession(ctx, store, "246990200000011", nil, framedIPv6Prefix("2001:db8:46:1a:1234:5678:9abc:def0", 128))
+	if err != nil {
+		t.Fatalf("bindRxToGxSession: %v", err)
+	}
+	if *rec.PCRFSessionID != "smf;1790704676;51;app_gx" || binding != rxBindingUEIPv6 {
+		t.Fatalf("IPv6 AAR bound to %q via %q, want IMS session via %q", *rec.PCRFSessionID, binding, rxBindingUEIPv6)
+	}
+
+	// IPv4 is tried first when the AAR carries both.
+	rec, binding, err = bindRxToGxSession(ctx, store, "246990200000011", net.ParseIP("10.45.0.27").To4(), framedIPv6Prefix("2001:db8:46:1a::1", 128))
+	if err != nil || binding != rxBindingUEIP || *rec.PCRFSessionID != "smf;1790704676;50;app_gx" {
+		t.Fatalf("dual AAR got session %v binding %q err %v, want IPv4 match first", rec.PCRFSessionID, binding, err)
+	}
+
+	// An address outside every stored /64 falls back to identity.
+	_, binding, err = bindRxToGxSession(ctx, store, "246990200000011", nil, framedIPv6Prefix("2001:db8:99::1", 128))
+	if err != nil || binding != rxBindingIdentity {
+		t.Fatalf("unknown IPv6 got binding %q err %v, want identity fallback", binding, err)
 	}
 }

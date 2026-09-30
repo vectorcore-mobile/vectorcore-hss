@@ -10,6 +10,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/svinson1121/vectorcore-hss/internal/models"
+	"github.com/svinson1121/vectorcore-hss/internal/repository"
 )
 
 func newTestStore(t *testing.T) *Store {
@@ -139,5 +140,35 @@ func TestGetAPNsByIDsCachesAndInvalidates(t *testing.T) {
 	}
 	if byID[2] != "ims-v2" {
 		t.Errorf("apn 2 = %q, want fresh value ims-v2 after invalidation", byID[2])
+	}
+}
+
+// TestServingAPNByUEIPv6Prefix proves the Gx-stored /64 is found by the Rx
+// lookup and that a re-CCR-I on the same PDN replaces the prefix (upsert).
+func TestServingAPNByUEIPv6Prefix(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	str := func(v string) *string { return &v }
+
+	rec := &models.ServingAPN{SubscriberID: 7, APNID: 2, APNName: "ims",
+		PCRFSessionID: str("smf;1;51;app_gx"), UEIPv6Prefix: str("2001:db8:46:1a::/64")}
+	if err := s.UpsertServingAPN(ctx, rec); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	got, err := s.GetServingAPNByUEIPv6Prefix(ctx, "2001:db8:46:1a::/64")
+	if err != nil || *got.PCRFSessionID != "smf;1;51;app_gx" {
+		t.Fatalf("lookup got %+v err %v", got, err)
+	}
+
+	rec2 := &models.ServingAPN{SubscriberID: 7, APNID: 2, APNName: "ims",
+		PCRFSessionID: str("smf;1;60;app_gx"), UEIPv6Prefix: str("2001:db8:46:2b::/64")}
+	if err := s.UpsertServingAPN(ctx, rec2); err != nil {
+		t.Fatalf("re-upsert: %v", err)
+	}
+	if _, err := s.GetServingAPNByUEIPv6Prefix(ctx, "2001:db8:46:1a::/64"); err != repository.ErrNotFound {
+		t.Fatalf("stale prefix lookup err %v, want ErrNotFound", err)
+	}
+	if got, err := s.GetServingAPNByUEIPv6Prefix(ctx, "2001:db8:46:2b::/64"); err != nil || *got.PCRFSessionID != "smf;1;60;app_gx" {
+		t.Fatalf("new prefix lookup got %+v err %v", got, err)
 	}
 }

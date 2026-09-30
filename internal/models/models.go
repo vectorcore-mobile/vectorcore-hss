@@ -288,14 +288,17 @@ func (SubscriberRouting) TableName() string { return "subscriber_routing" }
 // ── SERVING_APN ───────────────────────────────────────────────────────────────
 
 type ServingAPN struct {
-	ServingAPNID        int        `gorm:"column:serving_apn_id;primaryKey;autoIncrement" json:"serving_apn_id,omitempty"`
-	SubscriberID        int        `gorm:"column:subscriber_id;not null;uniqueIndex:uidx_serving_sub_apn" json:"subscriber_id"`
-	APNID               int        `gorm:"column:apn;uniqueIndex:uidx_serving_sub_apn;default:0"          json:"apn"`
-	APNName             string     `gorm:"column:apn_name;size:100"                       json:"apn_name,omitempty"`
-	PCRFSessionID       *string    `gorm:"column:pcrf_session_id;size:100"                json:"pcrf_session_id,omitempty"`
-	SubscriberRouting   *string    `gorm:"column:subscriber_routing;size:100"             json:"subscriber_routing,omitempty"`
-	IPVersion           int        `gorm:"column:ip_version;default:0"                    json:"ip_version"`
-	UEIP                *string    `gorm:"column:ue_ip;size:64"                           json:"ue_ip,omitempty"`
+	ServingAPNID      int     `gorm:"column:serving_apn_id;primaryKey;autoIncrement" json:"serving_apn_id,omitempty"`
+	SubscriberID      int     `gorm:"column:subscriber_id;not null;uniqueIndex:uidx_serving_sub_apn" json:"subscriber_id"`
+	APNID             int     `gorm:"column:apn;uniqueIndex:uidx_serving_sub_apn;default:0"          json:"apn"`
+	APNName           string  `gorm:"column:apn_name;size:100"                       json:"apn_name,omitempty"`
+	PCRFSessionID     *string `gorm:"column:pcrf_session_id;size:100"                json:"pcrf_session_id,omitempty"`
+	SubscriberRouting *string `gorm:"column:subscriber_routing;size:100"             json:"subscriber_routing,omitempty"`
+	IPVersion         int     `gorm:"column:ip_version;default:0"                    json:"ip_version"`
+	UEIP              *string `gorm:"column:ue_ip;size:64"                           json:"ue_ip,omitempty"`
+	// UEIPv6Prefix is the PDN's IPv6 /64 ("2001:db8:1:2::/64"), the Rx
+	// binding key for IPv6 (TS 29.213 §4); ue_ip holds only the IPv4 address.
+	UEIPv6Prefix        *string    `gorm:"column:ue_ipv6_prefix;size:64;index" json:"ue_ipv6_prefix,omitempty"`
 	ServingPGW          *string    `gorm:"column:serving_pgw;size:512"                    json:"serving_pgw,omitempty"`
 	ServingPGWTimestamp *time.Time `gorm:"column:serving_pgw_timestamp"                   json:"serving_pgw_timestamp,omitempty"`
 	ServingPGWRealm     *string    `gorm:"column:serving_pgw_realm;size:512"              json:"serving_pgw_realm,omitempty"`

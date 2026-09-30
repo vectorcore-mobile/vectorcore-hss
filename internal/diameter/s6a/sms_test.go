@@ -194,6 +194,10 @@ func (s *s6aTestStore) GetServingAPNByUEIP(_ context.Context, _ string) (*models
 	return nil, repository.ErrNotFound
 }
 
+func (s *s6aTestStore) GetServingAPNByUEIPv6Prefix(_ context.Context, _ string) (*models.ServingAPN, error) {
+	return nil, repository.ErrNotFound
+}
+
 func (s *s6aTestStore) GetSubscriberRoutingBySubscriberAndAPN(_ context.Context, _, apnID int) (*models.SubscriberRouting, error) {
 	if s.routing != nil {
 		if r, ok := s.routing[apnID]; ok {

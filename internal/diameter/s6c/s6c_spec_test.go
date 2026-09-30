@@ -282,6 +282,10 @@ func (s *s6cStore) GetServingAPNByIdentity(_ context.Context, _ string) (*models
 func (s *s6cStore) GetServingAPNByUEIP(_ context.Context, _ string) (*models.ServingAPN, error) {
 	return nil, repository.ErrNotFound
 }
+
+func (s *s6cStore) GetServingAPNByUEIPv6Prefix(_ context.Context, _ string) (*models.ServingAPN, error) {
+	return nil, repository.ErrNotFound
+}
 func (s *s6cStore) GetSubscriberRoutingBySubscriberAndAPN(_ context.Context, _, _ int) (*models.SubscriberRouting, error) {
 	return nil, repository.ErrNotFound
 }

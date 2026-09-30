@@ -173,6 +173,10 @@ func (m *mockStore) GetServingAPNByUEIP(_ context.Context, _ string) (*models.Se
 	return nil, repository.ErrNotFound
 }
 
+func (m *mockStore) GetServingAPNByUEIPv6Prefix(_ context.Context, _ string) (*models.ServingAPN, error) {
+	return nil, repository.ErrNotFound
+}
+
 func (m *mockStore) GetSubscriberRoutingBySubscriberAndAPN(_ context.Context, _, _ int) (*models.SubscriberRouting, error) {
 	return nil, repository.ErrNotFound
 }

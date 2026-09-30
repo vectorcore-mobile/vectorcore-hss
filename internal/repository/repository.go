@@ -65,6 +65,9 @@ type Repository interface {
 	// AAR handler where the P-CSCF may send any Subscription-ID type.
 	GetServingAPNByIdentity(ctx context.Context, identity string) (*models.ServingAPN, error)
 	GetServingAPNByUEIP(ctx context.Context, ueIP string) (*models.ServingAPN, error)
+	// GetServingAPNByUEIPv6Prefix finds the Gx session whose PDN owns the
+	// IPv6 /64 key (e.g. "2001:db8:1:2::/64").
+	GetServingAPNByUEIPv6Prefix(ctx context.Context, prefix string) (*models.ServingAPN, error)
 
 	// Subscriber Routing (static IP assignment)
 	GetSubscriberRoutingBySubscriberAndAPN(ctx context.Context, subscriberID, apnID int) (*models.SubscriberRouting, error)
