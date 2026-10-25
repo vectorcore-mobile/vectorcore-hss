@@ -17,7 +17,8 @@ func (s *Server) startNRFRegistration() {
 	}
 
 	scheme := sbi.SchemeFromTLS(s.cfg.TLSCertFile)
-	ourIP := sbi.ResolveOurIP()
+	ourIP := sbi.ResolveAdvertiseIP(s.cfg.AdvertiseAddress, s.cfg.BindAddress, s.cfg.NRFAddress)
+	s.log.Info("pcf: advertising SBI address to NRF", zap.String("ip", ourIP), zap.Int("port", s.cfg.BindPort))
 	services := []sbi.NFService{
 		sbi.MakeService("npcf-smpolicycontrol", scheme, ourIP, s.cfg.BindPort, []string{"v1"}),
 		sbi.MakeService("npcf-am-policy-control", scheme, ourIP, s.cfg.BindPort, []string{"v1"}),

@@ -87,6 +87,7 @@ database:
 5gc:
   sbi:
     bind_address: "::"
+    advertise_address: "10.0.2.117"
     bind_port: 7777
     oauth2_enabled: true
     oauth2_bypass: false
@@ -119,6 +120,9 @@ database:
 
 	if !cfg.UDM.Enabled || !cfg.PCF.Enabled {
 		t.Fatalf("expected UDM and PCF enabled, got %+v %+v", cfg.UDM, cfg.PCF)
+	}
+	if cfg.UDM.AdvertiseAddress != "10.0.2.117" || cfg.PCF.AdvertiseAddress != "10.0.2.117" {
+		t.Fatalf("expected shared advertise address, got %q %q", cfg.UDM.AdvertiseAddress, cfg.PCF.AdvertiseAddress)
 	}
 	if cfg.UDM.BindPort != 7777 || cfg.PCF.BindPort != 7777 {
 		t.Fatalf("expected shared bind port 7777, got %d %d", cfg.UDM.BindPort, cfg.PCF.BindPort)

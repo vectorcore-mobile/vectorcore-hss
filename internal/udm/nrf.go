@@ -21,7 +21,8 @@ func (s *Server) startNRFRegistration() {
 	}
 
 	scheme := sbi.SchemeFromTLS(s.cfg.TLSCertFile)
-	ourIP := sbi.ResolveOurIP()
+	ourIP := sbi.ResolveAdvertiseIP(s.cfg.AdvertiseAddress, s.cfg.BindAddress, s.cfg.NRFAddress)
+	s.log.Info("udm: advertising SBI address to NRF", zap.String("ip", ourIP), zap.Int("port", s.cfg.BindPort))
 	services := []sbi.NFService{
 		sbi.MakeService("nudm-ueau", scheme, ourIP, s.cfg.BindPort, []string{"v1", "v2"}),
 		sbi.MakeService("nudm-sdm", scheme, ourIP, s.cfg.BindPort, []string{"v1", "v2"}),

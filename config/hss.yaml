@@ -104,6 +104,7 @@ pcrf:
   sbi:
     bind_address: "::"
     bind_port: 7777
+    # advertise_address: 10.0.2.117   # IPv4 registered with the NRF; default: bind_address if concrete, else the source IP routing to the NRF
 
     # TLS leave blank for cleartext HTTP/2 (h2c).
     # tls_cert_file: /etc/hss/tls/cert.pem

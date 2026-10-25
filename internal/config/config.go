@@ -62,6 +62,9 @@ type FiveGCSBIConfig struct {
 	OAuth2Enabled bool            `yaml:"oauth2_enabled"`
 	OAuth2Bypass  bool            `yaml:"oauth2_bypass"`
 	Client        SBIClientConfig `yaml:"client"`
+	// AdvertiseAddress is the IPv4 address registered with the NRF. Leave
+	// empty to use bind_address when concrete, else the route toward the NRF.
+	AdvertiseAddress string `yaml:"advertise_address"`
 }
 
 type FiveGCNFConfig struct {
@@ -94,6 +97,8 @@ type UDMConfig struct {
 	Enabled     bool   `yaml:"enabled"`
 	BindAddress string `yaml:"bind_address"`
 	BindPort    int    `yaml:"bind_port"`
+	// AdvertiseAddress is the IPv4 address registered with the NRF.
+	AdvertiseAddress string `yaml:"advertise_address"`
 	// MCC and MNC identify the home PLMN for NRF registration.
 	// If left empty they are inherited from hss.MCC / hss.MNC at startup.
 	MCC string `yaml:"mcc"`
@@ -136,6 +141,8 @@ type PCFConfig struct {
 	Enabled     bool   `yaml:"enabled"`
 	BindAddress string `yaml:"bind_address"`
 	BindPort    int    `yaml:"bind_port"`
+	// AdvertiseAddress is the IPv4 address registered with the NRF.
+	AdvertiseAddress string `yaml:"advertise_address"`
 	// MCC and MNC identify the home PLMN for NRF registration.
 	// If left empty they are inherited from hss.MCC / hss.MNC at startup.
 	MCC           string          `yaml:"mcc"`
@@ -398,6 +405,10 @@ func normalizeFiveGC(cfg *Config) {
 	if cfg.FiveGC.SBI.BindAddress != "" {
 		cfg.UDM.BindAddress = cfg.FiveGC.SBI.BindAddress
 		cfg.PCF.BindAddress = cfg.FiveGC.SBI.BindAddress
+	}
+	if cfg.FiveGC.SBI.AdvertiseAddress != "" {
+		cfg.UDM.AdvertiseAddress = cfg.FiveGC.SBI.AdvertiseAddress
+		cfg.PCF.AdvertiseAddress = cfg.FiveGC.SBI.AdvertiseAddress
 	}
 	if cfg.FiveGC.SBI.BindPort != 0 {
 		cfg.UDM.BindPort = cfg.FiveGC.SBI.BindPort
