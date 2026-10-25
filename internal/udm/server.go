@@ -187,6 +187,8 @@ func (s *Server) mountRoutes(r *chi.Mux) {
 
 		// nudm-sdm — Subscription data management (AMF, SMF)
 		sdm := fmt.Sprintf("/nudm-sdm/%s/{supi}", ver)
+		r.Get(sdm,
+			s.wrapOAuth("nudm-sdm", s.handleGetDataSets))
 		r.Get(sdm+"/am-data",
 			s.wrapOAuth("nudm-sdm", s.handleAMData))
 		r.Get(sdm+"/sm-data",
@@ -258,4 +260,24 @@ func jsonError(w http.ResponseWriter, code int, cause string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	json.NewEncoder(w).Encode(map[string]string{"cause": cause})
+}
+
+// problemDetails is the TS 29.571 ProblemDetails error body.
+type problemDetails struct {
+	Title  string `json:"title,omitempty"`
+	Status int    `json:"status"`
+	Detail string `json:"detail,omitempty"`
+	Cause  string `json:"cause,omitempty"`
+}
+
+// problemJSON writes a spec-compliant application/problem+json error.
+func problemJSON(w http.ResponseWriter, code int, cause, detail string) {
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(code)
+	json.NewEncoder(w).Encode(problemDetails{
+		Title:  http.StatusText(code),
+		Status: code,
+		Detail: detail,
+		Cause:  cause,
+	})
 }
