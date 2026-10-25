@@ -36,8 +36,8 @@ func TestResolveSessionPolicy(t *testing.T) {
 	})
 	apn := models.APN{
 		APN:                        "internet",
-		APNAMBRDown:                99999,
-		APNAMBRUp:                  88888,
+		APNAMBRDown:                99000000,
+		APNAMBRUp:                  1500000,
 		QCI:                        9,
 		ARPPriority:                4,
 		ARPPreemptionCapability:    boolPtr(false),
@@ -59,11 +59,19 @@ func TestResolveSessionPolicy(t *testing.T) {
 	if p.DNN != "internet" {
 		t.Fatalf("DNN: got %q", p.DNN)
 	}
+	// DB bit rates are bps (as sent in S6a/Gx AVPs); SBI wants TS 29.571 strings.
 	if p.SessionAMBRDownlink != "99 Mbps" {
 		t.Fatalf("SessionAMBRDownlink: got %q", p.SessionAMBRDownlink)
 	}
+	if p.SessionAMBRUplink != "1500 Kbps" {
+		t.Fatalf("SessionAMBRUplink: got %q", p.SessionAMBRUplink)
+	}
 	if len(p.Rules) != 1 {
 		t.Fatalf("Rules len: got %d", len(p.Rules))
+	}
+	if r := p.Rules[0]; r.MaxBRDownlink != "512 Kbps" || r.MaxBRUplink != "128 Kbps" ||
+		r.GuaranteedBRDL != "256 Kbps" || r.GuaranteedBRUL != "64 Kbps" {
+		t.Fatalf("rule bit rates: got MBR %q/%q GBR %q/%q", r.MaxBRDownlink, r.MaxBRUplink, r.GuaranteedBRDL, r.GuaranteedBRUL)
 	}
 	if p.DefaultPreemptCap == nil || *p.DefaultPreemptCap {
 		t.Fatalf("DefaultPreemptCap: got %#v", p.DefaultPreemptCap)

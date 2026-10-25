@@ -45,14 +45,62 @@ func TestHandleSMDataMatchesNormalizedDNN(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected requested DNN config key, got %#v", items[0].DNNConfigs)
 	}
-	if cfg.SessionAMBR == nil || cfg.SessionAMBR.Uplink == "" || cfg.SessionAMBR.Downlink == "" {
-		t.Fatalf("expected session AMBR in DNN config, got %#v", cfg)
+	if cfg.SessionAMBR == nil || cfg.SessionAMBR.Uplink != "1 Mbps" || cfg.SessionAMBR.Downlink != "2 Mbps" {
+		t.Fatalf("expected session AMBR 1 Mbps/2 Mbps (DB stores bps), got %#v", cfg.SessionAMBR)
 	}
 	if cfg.FiveGQosProfile == nil {
 		t.Fatalf("expected 5gQosProfile in DNN config, got %#v", cfg)
 	}
 	if cfg.FiveGQosProfile.ARP.PreemptCap == "" || cfg.FiveGQosProfile.ARP.PreemptVuln == "" {
 		t.Fatalf("expected ARP preemption flags in DNN config, got %#v", cfg.FiveGQosProfile)
+	}
+}
+
+// AMBR values in the DB are bps (the same values S6a/Gx send in Diameter
+// AVPs) and must reach the SBI as TS 29.571 BitRate strings.
+func TestAMBRIsFormattedFromBps(t *testing.T) {
+	s, _ := newTestUDMServer(t)
+
+	r := chi.NewRouter()
+	r.Get("/nudm-sdm/v2/{supi}/am-data", s.handleAMData)
+	r.Get("/nudr-dr/v1/policy-data/ues/{ueId}/am-data", s.handleUDRAMPolicyData)
+	r.Get("/nudr-dr/v1/policy-data/ues/{ueId}/sm-data", s.handleUDRSMPolicyData)
+
+	get := func(path string, out interface{}) {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s: status %d body=%s", path, rec.Code, rec.Body.String())
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), out); err != nil {
+			t.Fatalf("GET %s: decode: %v body=%s", path, err, rec.Body.String())
+		}
+	}
+	checkAMBR := func(what string, got *ambrData, ul, dl string) {
+		t.Helper()
+		if got == nil || got.Uplink != ul || got.Downlink != dl {
+			t.Fatalf("%s: got %#v, want uplink %q downlink %q", what, got, ul, dl)
+		}
+	}
+
+	var am amData
+	get("/nudm-sdm/v2/imsi-001010000000001/am-data", &am)
+	checkAMBR("nudm-sdm am-data subscribedUeAmbr", am.SubscribedUEAMBR, "1500 Kbps", "50 Mbps")
+
+	var pam struct {
+		SubscribedUEAMBR *ambrData `json:"subscribedUeAmbr"`
+	}
+	get("/nudr-dr/v1/policy-data/ues/imsi-001010000000001/am-data", &pam)
+	checkAMBR("nudr-dr policy am-data subscribedUeAmbr", pam.SubscribedUEAMBR, "1500 Kbps", "50 Mbps")
+
+	var psm []smPolicyData
+	get("/nudr-dr/v1/policy-data/ues/imsi-001010000000001/sm-data", &psm)
+	if len(psm) == 0 {
+		t.Fatal("nudr-dr policy sm-data: no entries")
+	}
+	for _, item := range psm {
+		checkAMBR("nudr-dr policy sm-data sessionAmbr "+item.DNN, item.SessionAMBR, "1 Mbps", "2 Mbps")
 	}
 }
 
@@ -156,8 +204,8 @@ func seedUDMSubscriberData(t *testing.T, db *gorm.DB) {
 	t.Helper()
 	apn := models.APN{
 		APN:         "internet",
-		APNAMBRDown: 204800,
-		APNAMBRUp:   102400,
+		APNAMBRDown: 2000000,
+		APNAMBRUp:   1000000,
 		QCI:         9,
 		ARPPriority: 4,
 	}
@@ -167,6 +215,8 @@ func seedUDMSubscriberData(t *testing.T, db *gorm.DB) {
 		AUCID:      1,
 		DefaultAPN: apn.APNID,
 		APNList:    strconv.Itoa(apn.APNID),
+		UEAMBRDown: 50000000,
+		UEAMBRUp:   1500000,
 	})
 }
 

@@ -2,12 +2,12 @@ package policy
 
 import (
 	"context"
-	"fmt"
 	"strconv"
 	"strings"
 
 	"github.com/svinson1121/vectorcore-hss/internal/models"
 	"github.com/svinson1121/vectorcore-hss/internal/repository"
+	"github.com/svinson1121/vectorcore-hss/internal/sbi"
 )
 
 type SessionPolicy struct {
@@ -59,8 +59,8 @@ func ResolveSessionPolicy(ctx context.Context, store repository.Repository, supi
 		Supi:                    sub.IMSI,
 		DNN:                     apn.APN,
 		ChargingCharacteristics: apn.ChargingCharacteristics,
-		SessionAMBRDownlink:     kbpsToString(apn.APNAMBRDown),
-		SessionAMBRUplink:       kbpsToString(apn.APNAMBRUp),
+		SessionAMBRDownlink:     sbi.FormatBitRate(apn.APNAMBRDown),
+		SessionAMBRUplink:       sbi.FormatBitRate(apn.APNAMBRUp),
 		DefaultQos5QI:           normalize5QI(apn.QCI),
 		DefaultARP:              normalizeARP(apn.ARPPriority),
 		DefaultPreemptCap:       apn.ARPPreemptionCapability,
@@ -96,10 +96,10 @@ func ResolveSessionPolicy(ctx context.Context, store repository.Repository, supi
 			ChargingReference: chargingReference(rule.RuleName, rule.RatingGroup),
 			Flows:             flows,
 			RatingGroup:       rule.RatingGroup,
-			MaxBRDownlink:     kbpsToString(rule.MBRDown),
-			MaxBRUplink:       kbpsToString(rule.MBRUp),
-			GuaranteedBRDL:    kbpsToString(rule.GBRDown),
-			GuaranteedBRUL:    kbpsToString(rule.GBRUp),
+			MaxBRDownlink:     sbi.FormatBitRate(rule.MBRDown),
+			MaxBRUplink:       sbi.FormatBitRate(rule.MBRUp),
+			GuaranteedBRDL:    sbi.FormatBitRate(rule.GBRDown),
+			GuaranteedBRUL:    sbi.FormatBitRate(rule.GBRUp),
 			FiveQI:            normalize5QI(rule.QCI),
 			ARP:               normalizeARP(rule.ARPPriority),
 			PreemptCap:        rule.ARPPreemptionCapability,
@@ -161,16 +161,6 @@ func normalizeDNN(s string) string {
 		return s[:i]
 	}
 	return s
-}
-
-func kbpsToString(kbps int) string {
-	if kbps >= 1000000 {
-		return fmt.Sprintf("%d Gbps", kbps/1000000)
-	}
-	if kbps >= 1000 {
-		return fmt.Sprintf("%d Mbps", kbps/1000)
-	}
-	return fmt.Sprintf("%d Kbps", kbps)
 }
 
 func chargingReference(ruleName string, ratingGroup *int) string {

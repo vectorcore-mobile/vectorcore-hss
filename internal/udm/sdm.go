@@ -8,8 +8,9 @@ package udm
 // GET /nudm-sdm/v{1,2}/{supi}/nssai            → Allowed NSSAI
 // POST/DELETE /nudm-sdm/v{1,2}/{supi}/sdm-subscriptions → change notifications (stub)
 //
-// AMBR format: Open5GS expects strings like "1 Gbps", "100 Mbps", "512 Kbps".
-// Our DB stores raw kbps integers.
+// AMBR format: TS 29.571 BitRate strings such as "1 Gbps", "100 Mbps".
+// The DB stores AMBR in bps (the same values S6a/Gx send in Diameter AVPs);
+// sbi.FormatBitRate does the conversion.
 
 import (
 	"context"
@@ -24,6 +25,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/svinson1121/vectorcore-hss/internal/repository"
+	"github.com/svinson1121/vectorcore-hss/internal/sbi"
 )
 
 // defaultNSSAI is returned when a subscriber has no NSSAI configured.
@@ -84,8 +86,8 @@ func (s *Server) handleAMData(w http.ResponseWriter, r *http.Request) {
 
 	resp := amData{
 		SubscribedUEAMBR: &ambrData{
-			Uplink:   kbpsToString(sub.UEAMBRUp),
-			Downlink: kbpsToString(sub.UEAMBRDown),
+			Uplink:   sbi.FormatBitRate(sub.UEAMBRUp),
+			Downlink: sbi.FormatBitRate(sub.UEAMBRDown),
 		},
 		NSSAI: &nssaiData{
 			DefaultSingleNssais: slices,
@@ -206,8 +208,8 @@ func (s *Server) handleSMData(w http.ResponseWriter, r *http.Request) {
 				AllowedSSCModes: []string{"SSC_MODE_1", "SSC_MODE_2"},
 			},
 			SessionAMBR: &ambrData{
-				Uplink:   kbpsToString(apn.APNAMBRUp),
-				Downlink: kbpsToString(apn.APNAMBRDown),
+				Uplink:   sbi.FormatBitRate(apn.APNAMBRUp),
+				Downlink: sbi.FormatBitRate(apn.APNAMBRDown),
 			},
 			FiveGQosProfile: &qosProfile{
 				FiveQI: fiveQI,
@@ -401,17 +403,6 @@ func (s *Server) handleSDMUnsubscribe(w http.ResponseWriter, r *http.Request) {
 
 func resolveIMSI(r *http.Request) (string, error) {
 	return ParseSUPI(chi.URLParam(r, "supi"))
-}
-
-// kbpsToString converts a kbps integer to Open5GS-format AMBR string.
-func kbpsToString(kbps int) string {
-	if kbps >= 1000000 {
-		return fmt.Sprintf("%d Gbps", kbps/1000000)
-	}
-	if kbps >= 1000 {
-		return fmt.Sprintf("%d Mbps", kbps/1000)
-	}
-	return fmt.Sprintf("%d Kbps", kbps)
 }
 
 // parseNSSAI unmarshals a JSON NSSAI array, defaulting to SST=1 on error.

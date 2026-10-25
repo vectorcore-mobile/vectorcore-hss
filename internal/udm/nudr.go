@@ -27,6 +27,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/svinson1121/vectorcore-hss/internal/repository"
+	"github.com/svinson1121/vectorcore-hss/internal/sbi"
 )
 
 // ── AM policy data ────────────────────────────────────────────────────────────
@@ -62,8 +63,8 @@ func (s *Server) handleUDRAMPolicyData(w http.ResponseWriter, r *http.Request) {
 
 	resp := amPolicyData{
 		SubscribedUEAMBR: &ambrData{
-			Uplink:   kbpsToString(sub.UEAMBRUp),
-			Downlink: kbpsToString(sub.UEAMBRDown),
+			Uplink:   sbi.FormatBitRate(sub.UEAMBRUp),
+			Downlink: sbi.FormatBitRate(sub.UEAMBRDown),
 		},
 		SubscCats: []string{},
 	}
@@ -162,8 +163,8 @@ func (s *Server) handleUDRSMPolicyData(w http.ResponseWriter, r *http.Request) {
 				SingleNSSAI: sl,
 				DNN:         apn.APN,
 				SessionAMBR: &ambrData{
-					Uplink:   kbpsToString(apn.APNAMBRUp),
-					Downlink: kbpsToString(apn.APNAMBRDown),
+					Uplink:   sbi.FormatBitRate(apn.APNAMBRUp),
+					Downlink: sbi.FormatBitRate(apn.APNAMBRDown),
 				},
 				Online:  &online,
 				Offline: &offline,
