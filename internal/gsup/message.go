@@ -8,33 +8,36 @@ package gsup
 // Each GSUP message is a sequence of TLV (Tag-Length-Value) information elements.
 // The first IE is always the message type (tag 0x01).
 
-// Message type codes
+// Message type codes (libosmocore enum osmo_gsup_message_type)
 const (
-	MsgSendAuthInfoReq  = 0x08 // AIR -- peer requests auth vectors
-	MsgSendAuthInfoErr  = 0x09
-	MsgSendAuthInfoRes  = 0x0A // AIA -- HSS sends auth vectors
+	MsgUpdateLocReq = 0x04 // ULR -- peer reports location update
+	MsgUpdateLocErr = 0x05
+	MsgUpdateLocRes = 0x06 // ULA
 
-	MsgUpdateLocReq     = 0x04 // ULR -- peer reports location update
-	MsgUpdateLocErr     = 0x05
-	MsgUpdateLocRes     = 0x06 // ULA
+	MsgSendAuthInfoReq = 0x08 // AIR -- peer requests auth vectors
+	MsgSendAuthInfoErr = 0x09
+	MsgSendAuthInfoRes = 0x0A // AIA -- HSS sends auth vectors
 
-	MsgInsertDataReq    = 0x10 // ISD -- HSS pushes subscriber data
-	MsgInsertDataErr    = 0x11
-	MsgInsertDataRes    = 0x12
+	MsgAuthFailureReport = 0x0B // peer reports auth failure -- no response
 
-	MsgDeleteDataReq    = 0x14
-	MsgDeleteDataErr    = 0x15
-	MsgDeleteDataRes    = 0x16
+	MsgPurgeMSReq = 0x0C // PUR
+	MsgPurgeMSErr = 0x0D
+	MsgPurgeMSRes = 0x0E
 
-	MsgPurgeMSReq       = 0x1C // PUR
-	MsgPurgeMSErr       = 0x1D
-	MsgPurgeMSRes       = 0x1E
+	MsgInsertDataReq = 0x10 // ISD -- HSS pushes subscriber data
+	MsgInsertDataErr = 0x11
+	MsgInsertDataRes = 0x12
 
-	MsgLocationCancelReq = 0x1B // sent by HSS to cancel location (not handled inbound)
-	MsgAuthFailureReport = 0x28 // peer reports auth failure -- NOOP ack
+	MsgDeleteDataReq = 0x14
+	MsgDeleteDataErr = 0x15
+	MsgDeleteDataRes = 0x16
+
+	MsgLocationCancelReq = 0x1C // sent by HSS to cancel location (not sent yet)
+	MsgLocationCancelErr = 0x1D
+	MsgLocationCancelRes = 0x1E
 )
 
-// Information element tags
+// Information element tags (libosmocore enum osmo_gsup_iei)
 const (
 	IEIMSITag              = 0x01
 	IECause                = 0x02
@@ -42,11 +45,15 @@ const (
 	IEPDPInfoComplete      = 0x04
 	IEPDPContextTag        = 0x05 // grouped: PDP/APN info
 	IECancelType           = 0x06
-	IEFreezePTMSI          = 0x08
-	IEMSISDNTag            = 0x08 // overlaps; context-dependent
+	IEFreezePTMSI          = 0x07
+	IEMSISDNTag            = 0x08
 	IEHLRNumber            = 0x09
-	IEMessageClass         = 0x0B
-	IEPDPChargingChar      = 0x0E
+	IEMessageClass         = 0x0A
+	IEPDPContextID         = 0x10
+	IEPDPType              = 0x11 // PDP address / type
+	IEAccessPointName      = 0x12
+	IEPDPQoSProfile        = 0x13
+	IEChargingChar         = 0x14
 	IERANDTag              = 0x20 // 16 bytes
 	IESRESTag              = 0x21 // 4 bytes (2G)
 	IEKcTag                = 0x22 // 8 bytes (2G session key)
@@ -54,16 +61,11 @@ const (
 	IECKTag                = 0x24 // 16 bytes (3G cipher key)
 	IEAUTNTag              = 0x25 // 16 bytes
 	IEAUTSTag              = 0x26 // 14 bytes (resync token)
-	IEXRESTag              = 0x27 // 8 bytes
-	IEPDPContextID         = 0x30
-	IEPDPType              = 0x31
-	IEAccessPointName      = 0x32
-	IEPDPQoSProfile        = 0x33
-	IEPDPChargingCharInner = 0x34
-	IENumberOfRequestedVec = 0x29
-	IENumberOfUsedVec      = 0x2A
-	IECNDomain             = 0x0F // 0x01=PS, 0x02=CS
-	IESessionMgmtCause     = 0x35
+	IEXRESTag              = 0x27 // RES, 4-16 bytes
+	IECNDomain             = 0x28 // 0x01=PS, 0x02=CS
+	IESupportedRATTypes    = 0x29
+	IECurrentRATType       = 0x2A
+	IENumberOfRequestedVec = 0x52
 )
 
 // CN domain values for IECNDomain

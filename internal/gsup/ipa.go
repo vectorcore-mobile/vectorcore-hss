@@ -9,20 +9,18 @@ package gsup
 //	[1 byte]  protocol ID
 //	[N bytes] payload
 //
-// Protocol IDs relevant to GSUP:
+// Protocol IDs (libosmocore include/osmocom/gsm/protocol/ipaccess.h):
 //
-//	0xFE  OSMO  -- Osmocom extension; carries GSUP sub-protocol
-//	0xFE + extension byte 0x05 = GSUP
+//	0xFE  IPAC_PROTO_IPACCESS -- CCM: PING/PONG, ID_GET/ID_RESP/ID_ACK
+//	0xEE  IPAC_PROTO_OSMO     -- Osmocom extensions; ext byte 0x05 = GSUP
 //
-// The sub-protocol byte immediately follows the protocol byte for OSMO messages,
+// The ext byte immediately follows the protocol byte for OSMO messages,
 // so the effective header for a GSUP message is 4 bytes:
 //
-//	len(2) | proto=0xFE | ext=0x05 | gsup-payload...
-//
-// CCM (Common Control Messages, proto=0xFF) are used for peer identity exchange
-// (ID_GET / ID_RESP) and keepalive (PING / PONG).
+//	len(2) | proto=0xEE | ext=0x05 | gsup-payload...
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -30,34 +28,42 @@ import (
 )
 
 const (
-	ipaProtoCCM      = 0xFF // Common Control Messages (ID_GET/ID_RESP)
-	ipaProtoOSMO     = 0xFE // Osmocom extension (current libosmocore)
-	ipaProtoOSMOLegacy = 0xEE // Osmocom extension (old libosmocore, same format)
-	ipaExtGSUP   = 0x05 // GSUP sub-protocol under OSMO
+	ipaProtoCCM  = 0xFE // IPAC_PROTO_IPACCESS: Common Control Messages
+	ipaProtoOSMO = 0xEE // IPAC_PROTO_OSMO: Osmocom extensions (GSUP, CTRL, ...)
+	ipaExtGSUP   = 0x05 // IPAC_PROTO_EXT_GSUP
 
-	// OSMO-level keepalive (proto=0xFE, NOT CCM).
-	// libosmocore uses these rather than CCM 0xFF for ping/pong.
-	ipaOSMOPing = 0x00
-	ipaOSMOPong = 0x01
-
-	// CCM message types (proto=0xFF)
+	// CCM message types (proto=0xFE)
 	ccmMsgPING   = 0x00
 	ccmMsgPONG   = 0x01
 	ccmMsgIDGet  = 0x04
 	ccmMsgIDResp = 0x05
 	ccmMsgIDACK  = 0x06
 
-	// CCM identity tags sent in ID_RESP
-	ipaTagSerial   = 0x00
-	ipaTagUnitName = 0x01
-	ipaTagLocation = 0x02
-	ipaTagUnitType = 0x03
-	ipaTagEquipVer = 0x04
-	ipaTagSwVer    = 0x05
-	ipaTagIPAddr   = 0x06
-	ipaTagMACAddr  = 0x07
-	ipaTagUnitID   = 0x08
+	// CCM identity tags (IPAC_IDTAG_*)
+	ipaTagSerial    = 0x00
+	ipaTagUnitName  = 0x01
+	ipaTagLocation1 = 0x02
+	ipaTagLocation2 = 0x03
+	ipaTagEquipVer  = 0x04
+	ipaTagSwVer     = 0x05
+	ipaTagIPAddr    = 0x06
+	ipaTagMACAddr   = 0x07
+	ipaTagUnitID    = 0x08
 )
+
+// ipaIDGetFrame is libosmocore's ipa_id_req_msg: an ID_GET requesting the
+// same eight identity tags osmo-hlr asks a GSUP client for.
+var ipaIDGetFrame = []byte{
+	0x00, 0x11, ipaProtoCCM, ccmMsgIDGet,
+	0x01, ipaTagUnitID,
+	0x01, ipaTagMACAddr,
+	0x01, ipaTagLocation1,
+	0x01, ipaTagLocation2,
+	0x01, ipaTagEquipVer,
+	0x01, ipaTagSwVer,
+	0x01, ipaTagUnitName,
+	0x01, ipaTagSerial,
+}
 
 // ipaMsg is a decoded IPA frame.
 type ipaMsg struct {
@@ -85,10 +91,7 @@ func ipaRead(conn net.Conn) (*ipaMsg, error) {
 	}
 
 	msg := &ipaMsg{proto: proto}
-	if proto == ipaProtoOSMO || proto == ipaProtoOSMOLegacy {
-		if len(body) < 1 {
-			return nil, fmt.Errorf("ipa: OSMO frame too short")
-		}
+	if proto == ipaProtoOSMO {
 		msg.ext = body[0]
 		msg.payload = body[1:]
 	} else {
@@ -97,64 +100,38 @@ func ipaRead(conn net.Conn) (*ipaMsg, error) {
 	return msg, nil
 }
 
-// ipaWriteGSUP writes a GSUP payload wrapped in IPA framing to conn.
-// proto must match the proto byte the peer used when sending its request
-// (ipaProtoOSMO=0xFE or ipaProtoOSMOLegacy=0xEE); old libosmocom peers
-// only accept responses whose proto byte matches their own.
-func ipaWriteGSUP(conn net.Conn, proto byte, payload []byte) error {
-	// Header: 2-byte length + proto + ext(0x05) + payload
-	// Length field covers ext byte + payload.
-	totalBody := 1 + len(payload) // ext byte + payload
+// ipaWriteGSUP writes a GSUP payload wrapped in IPA OSMO/GSUP framing.
+func ipaWriteGSUP(w io.Writer, payload []byte) error {
+	// Length field covers the ext byte + payload.
+	totalBody := 1 + len(payload)
+	if totalBody > 0xFFFF {
+		return fmt.Errorf("ipa: GSUP payload too long (%d bytes)", len(payload))
+	}
 	frame := make([]byte, 3+totalBody)
 	binary.BigEndian.PutUint16(frame[0:2], uint16(totalBody))
-	frame[2] = proto
+	frame[2] = ipaProtoOSMO
 	frame[3] = ipaExtGSUP
 	copy(frame[4:], payload)
-	_, err := conn.Write(frame)
+	_, err := w.Write(frame)
 	return err
 }
 
-// ipaWriteOSMOPong sends an IPA PONG using the OSMO sub-protocol (proto=0xFE,
-// ext=0x01). libosmocom uses this rather than the CCM PING/PONG for keepalive.
-func ipaWriteOSMOPong(conn net.Conn) error {
-	frame := []byte{0x00, 0x01, ipaProtoOSMO, ipaOSMOPong}
-	_, err := conn.Write(frame)
+// ipaWriteCCM writes a payload-less CCM message (PONG, ID_ACK).
+func ipaWriteCCM(w io.Writer, msgType byte) error {
+	_, err := w.Write([]byte{0x00, 0x01, ipaProtoCCM, msgType})
 	return err
 }
 
-// ipaWriteIDGet sends a CCM ID_GET request asking the peer to identify itself.
-// The request includes the UNIT_NAME tag so OsmoMSC's CCM parser accepts it
-// and its GSUP client transitions to "ready" state, enabling GSUP ULR/AIR.
-//
-// Frame: [len=3] [proto=0xFF] [ID_GET=0x04] [tagLen=0x01] [tag=UNIT_NAME=0x01]
-func ipaWriteIDGet(conn net.Conn) error {
-	frame := []byte{0x00, 0x03, ipaProtoCCM, ccmMsgIDGet, 0x01, ipaTagUnitName}
-	_, err := conn.Write(frame)
-	return err
-}
-
-// ipaWriteIDACK sends a CCM ID_ACK completing the IPA CCM handshake.
-// OsmoMSC's GSUP client requires this acknowledgement before it will
-// send any GSUP messages (ULR, AIR, etc.).
-//
-// Frame: [len=1] [proto=0xFF] [ID_ACK=0x06]
-func ipaWriteIDACK(conn net.Conn) error {
-	frame := []byte{0x00, 0x01, ipaProtoCCM, ccmMsgIDACK}
-	_, err := conn.Write(frame)
-	return err
-}
-
-// parseIDResp extracts the unit-name tag from an ID_RESP payload.
-// Returns the peer name (unit-name tag) if present.
+// parseIDResp extracts the unit-name tag from a CCM ID_RESP payload.
+// Each tag is encoded as len(2, big-endian) | tag(1) | value(len-1), as
+// parsed by libosmocore's ipa_ccm_id_resp_parse; the value is a
+// NUL-terminated string. Returns "" when the unit name is absent.
 func parseIDResp(payload []byte) string {
 	i := 1 // skip the msg type byte
-	for i < len(payload) {
-		if i+1 >= len(payload) {
-			break
-		}
-		tagLen := int(payload[i])
-		tag := payload[i+1]
-		i += 2
+	for len(payload)-i >= 3 {
+		tagLen := int(binary.BigEndian.Uint16(payload[i : i+2]))
+		tag := payload[i+2]
+		i += 3
 		if tagLen < 1 {
 			break
 		}
@@ -165,7 +142,7 @@ func parseIDResp(payload []byte) string {
 		val := payload[i : i+valueLen]
 		i += valueLen
 		if tag == ipaTagUnitName {
-			return string(val)
+			return string(bytes.TrimRight(val, "\x00"))
 		}
 	}
 	return ""

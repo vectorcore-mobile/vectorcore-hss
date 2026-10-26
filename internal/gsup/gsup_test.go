@@ -10,11 +10,13 @@ package gsup
 // interface with in-memory data.
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/hex"
 	"io"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -280,13 +282,26 @@ func clientReadIPA(t *testing.T, conn net.Conn) (proto, ext byte, payload []byte
 	return proto, 0, body
 }
 
+// idRespPayload builds a CCM ID_RESP payload the way libosmocore's
+// ipa_ccm_make_id_resp does: per tag, len(2, BE) | tag | NUL-terminated value.
+func idRespPayload(tags map[byte]string, order ...byte) []byte {
+	out := []byte{ccmMsgIDResp}
+	for _, tag := range order {
+		val := append([]byte(tags[tag]), 0)
+		out = binary.BigEndian.AppendUint16(out, uint16(1+len(val)))
+		out = append(out, tag)
+		out = append(out, val...)
+	}
+	return out
+}
+
 // clientWriteIDResp sends an IPA CCM ID_RESP identifying the test peer.
 func clientWriteIDResp(t *testing.T, conn net.Conn, name string) {
 	t.Helper()
-	nameBytes := []byte(name + "\x00")  // null-terminated string
-	itemLen := byte(1 + len(nameBytes)) // tag byte counts in the length
-	inner := []byte{ccmMsgIDResp, itemLen, ipaTagUnitName}
-	inner = append(inner, nameBytes...)
+	inner := idRespPayload(map[byte]string{
+		ipaTagUnitID:   "0/0/0",
+		ipaTagUnitName: name,
+	}, ipaTagUnitID, ipaTagUnitName)
 	frame := make([]byte, 3+len(inner))
 	binary.BigEndian.PutUint16(frame[0:2], uint16(len(inner)))
 	frame[2] = ipaProtoCCM
@@ -312,11 +327,16 @@ func clientWriteGSUP(t *testing.T, conn net.Conn, payload []byte) {
 
 // ── test setup ────────────────────────────────────────────────────────────────
 
-const testIMSI = "311435000000001"
+const (
+	testIMSI   = "311435000000001"
+	testMSISDN = "13342012832"
+)
 
 // newTestServer starts a GSUP server on a random port backed by a mock store.
-func newTestServer(t *testing.T) string {
+// opts adjust the server before it starts accepting.
+func newTestServer(t *testing.T, opts ...func(*Server)) string {
 	t.Helper()
+	msisdn := testMSISDN
 
 	imsi := testIMSI
 	store := &mockStore{
@@ -329,7 +349,8 @@ func newTestServer(t *testing.T) string {
 			IMSI:  &imsi,
 		},
 		sub: &models.Subscriber{
-			IMSI: testIMSI,
+			IMSI:   testIMSI,
+			MSISDN: &msisdn,
 		},
 	}
 
@@ -344,6 +365,9 @@ func newTestServer(t *testing.T) string {
 		store: store,
 		log:   log,
 		pub:   geored.NoopTypedPublisher{},
+	}
+	for _, opt := range opts {
+		opt(srv)
 	}
 
 	go func() {
@@ -367,8 +391,8 @@ func doHandshake(t *testing.T, conn net.Conn) {
 	if proto != ipaProtoCCM {
 		t.Fatalf("expected CCM frame after connect, got proto=0x%02X", proto)
 	}
-	if len(payload) == 0 || payload[0] != ccmMsgIDGet {
-		t.Fatalf("expected ID_GET (0x%02X), got 0x%02X", ccmMsgIDGet, payload[0])
+	if !bytes.Equal(payload, ipaIDGetFrame[3:]) {
+		t.Fatalf("ID_GET payload: got %x, want libosmocore ipa_id_req_msg %x", payload, ipaIDGetFrame[3:])
 	}
 	clientWriteIDResp(t, conn, "osmomsc-test")
 	// Server sends ID_ACK after receiving ID_RESP.
@@ -519,46 +543,134 @@ func TestGSUP_SendAuthInfo_UnknownIMSI(t *testing.T) {
 	t.Logf("SendAuthInfoErr with cause=0x%02X OK", causeIE.Data[0])
 }
 
-func TestGSUP_UpdateLocation(t *testing.T) {
-	addr := newTestServer(t)
+// dialHandshake connects to the test server and completes the IPA handshake.
+func dialHandshake(t *testing.T, addr string) net.Conn {
+	t.Helper()
 	conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	defer conn.Close()
-
+	t.Cleanup(func() { conn.Close() })
 	doHandshake(t, conn)
+	return conn
+}
 
-	ulr := NewMsg(MsgUpdateLocReq).Add(IEIMSITag, encodeIMSI(testIMSI))
-	clientWriteGSUP(t, conn, ulr.Bytes())
-
-	// First response: UpdateLocRes.
+// clientReadGSUP reads one IPA frame and decodes it as GSUP.
+func clientReadGSUP(t *testing.T, conn net.Conn) *Msg {
+	t.Helper()
 	proto, ext, payload := clientReadIPA(t, conn)
 	if proto != ipaProtoOSMO || ext != ipaExtGSUP {
-		t.Fatalf("expected GSUP ULA, got proto=0x%02X ext=0x%02X", proto, ext)
+		t.Fatalf("expected GSUP frame, got proto=0x%02X ext=0x%02X", proto, ext)
 	}
-	ula, err := Decode(payload)
+	m, err := Decode(payload)
 	if err != nil {
-		t.Fatalf("decode ULA: %v", err)
+		t.Fatalf("decode GSUP: %v", err)
 	}
-	if ula.Type != MsgUpdateLocRes {
-		t.Fatalf("expected UpdateLocRes (0x%02X), got 0x%02X", MsgUpdateLocRes, ula.Type)
-	}
-	t.Logf("ULA OK")
+	return m
+}
 
-	// Second message: InsertSubscriberData.
-	proto, ext, payload = clientReadIPA(t, conn)
-	if proto != ipaProtoOSMO || ext != ipaExtGSUP {
-		t.Fatalf("expected GSUP ISD, got proto=0x%02X ext=0x%02X", proto, ext)
+// expectNoFrame asserts the server sends nothing within d.
+func expectNoFrame(t *testing.T, conn net.Conn, d time.Duration) {
+	t.Helper()
+	conn.SetReadDeadline(time.Now().Add(d))
+	buf := make([]byte, 1)
+	if n, err := conn.Read(buf); n > 0 || err == nil {
+		t.Fatalf("unexpected frame from server (first byte 0x%02X)", buf[0])
 	}
-	isd, err := Decode(payload)
-	if err != nil {
-		t.Fatalf("decode ISD: %v", err)
-	}
+}
+
+// TestGSUP_UpdateLocation checks osmo-hlr's LU order: the ISD comes first,
+// and the ULA only after the peer's InsertDataResult. Field capture: we sent
+// the ULA first, so OsmoMSC completed the SGs LU with an empty MSISDN.
+func TestGSUP_UpdateLocation(t *testing.T) {
+	conn := dialHandshake(t, newTestServer(t))
+
+	ulr := NewMsg(MsgUpdateLocReq).
+		Add(IEIMSITag, encodeIMSI(testIMSI)).
+		AddByte(IECNDomain, CNDomainCS)
+	clientWriteGSUP(t, conn, ulr.Bytes())
+
+	isd := clientReadGSUP(t, conn)
 	if isd.Type != MsgInsertDataReq {
-		t.Fatalf("expected InsertDataReq (0x%02X), got 0x%02X", MsgInsertDataReq, isd.Type)
+		t.Fatalf("first message: got 0x%02X, want InsertDataReq (0x%02X)", isd.Type, MsgInsertDataReq)
 	}
-	t.Logf("ISD OK")
+	if ie := isd.Get(IEIMSITag); ie == nil || decodeIMSI(ie.Data) != testIMSI {
+		t.Fatalf("ISD IMSI IE: %+v", ie)
+	}
+	if ie := isd.Get(IECNDomain); ie == nil || len(ie.Data) != 1 || ie.Data[0] != CNDomainCS {
+		t.Fatalf("ISD CN-Domain IE (0x28): %+v", ie)
+	}
+	ie := isd.Get(IEMSISDNTag)
+	if ie == nil {
+		t.Fatal("ISD missing MSISDN IE")
+	}
+	if got := decodeBCDNumberLV(t, ie.Data); got != testMSISDN {
+		t.Fatalf("ISD MSISDN decodes (osmo-msc style) to %q, want %q", got, testMSISDN)
+	}
+
+	// The ULA must wait for the peer's acknowledgement of the ISD.
+	expectNoFrame(t, conn, 200*time.Millisecond)
+
+	clientWriteGSUP(t, conn, NewMsg(MsgInsertDataRes).Add(IEIMSITag, encodeIMSI(testIMSI)).Bytes())
+
+	ula := clientReadGSUP(t, conn)
+	if ula.Type != MsgUpdateLocRes {
+		t.Fatalf("after InsertDataResult: got 0x%02X, want UpdateLocRes (0x%02X)", ula.Type, MsgUpdateLocRes)
+	}
+	if ie := ula.Get(IEIMSITag); ie == nil || decodeIMSI(ie.Data) != testIMSI {
+		t.Fatalf("ULA IMSI IE: %+v", ie)
+	}
+}
+
+func TestGSUP_UpdateLocation_PSDomainEchoed(t *testing.T) {
+	conn := dialHandshake(t, newTestServer(t))
+
+	clientWriteGSUP(t, conn, NewMsg(MsgUpdateLocReq).
+		Add(IEIMSITag, encodeIMSI(testIMSI)).
+		AddByte(IECNDomain, CNDomainPS).Bytes())
+
+	isd := clientReadGSUP(t, conn)
+	if ie := isd.Get(IECNDomain); ie == nil || len(ie.Data) != 1 || ie.Data[0] != CNDomainPS {
+		t.Fatalf("ISD CN-Domain IE: %+v, want PS", ie)
+	}
+}
+
+func TestGSUP_UpdateLocation_InsertDataError(t *testing.T) {
+	conn := dialHandshake(t, newTestServer(t))
+
+	clientWriteGSUP(t, conn, NewMsg(MsgUpdateLocReq).Add(IEIMSITag, encodeIMSI(testIMSI)).Bytes())
+	if isd := clientReadGSUP(t, conn); isd.Type != MsgInsertDataReq {
+		t.Fatalf("got 0x%02X, want InsertDataReq", isd.Type)
+	}
+	clientWriteGSUP(t, conn, NewMsg(MsgInsertDataErr).
+		Add(IEIMSITag, encodeIMSI(testIMSI)).
+		AddByte(IECause, CauseNetworkFailure).Bytes())
+
+	resp := clientReadGSUP(t, conn)
+	if resp.Type != MsgUpdateLocErr {
+		t.Fatalf("got 0x%02X, want UpdateLocErr (0x%02X)", resp.Type, MsgUpdateLocErr)
+	}
+	if ie := resp.Get(IECause); ie == nil || len(ie.Data) != 1 || ie.Data[0] != CauseNetworkFailure {
+		t.Fatalf("cause IE: %+v", ie)
+	}
+}
+
+func TestGSUP_UpdateLocation_Timeout(t *testing.T) {
+	conn := dialHandshake(t, newTestServer(t, func(s *Server) { s.luTimeout = 100 * time.Millisecond }))
+
+	clientWriteGSUP(t, conn, NewMsg(MsgUpdateLocReq).Add(IEIMSITag, encodeIMSI(testIMSI)).Bytes())
+	if isd := clientReadGSUP(t, conn); isd.Type != MsgInsertDataReq {
+		t.Fatalf("got 0x%02X, want InsertDataReq", isd.Type)
+	}
+
+	resp := clientReadGSUP(t, conn)
+	if resp.Type != MsgUpdateLocErr {
+		t.Fatalf("got 0x%02X, want UpdateLocErr after timeout", resp.Type)
+	}
+
+	// A late InsertDataResult must not produce a ULA.
+	clientWriteGSUP(t, conn, NewMsg(MsgInsertDataRes).Add(IEIMSITag, encodeIMSI(testIMSI)).Bytes())
+	expectNoFrame(t, conn, 200*time.Millisecond)
 }
 
 func TestGSUP_PurgeMS(t *testing.T) {
@@ -611,6 +723,104 @@ func TestGSUP_Ping(t *testing.T) {
 		t.Fatalf("expected PONG (0x%02X), got 0x%02X", ccmMsgPONG, payload[0])
 	}
 	t.Log("PONG OK")
+}
+
+// decodeBCDNumberLV mirrors libosmocore's gsm48_decode_bcd_number2 with
+// h_len 0, which is how osmo-msc reads the ISD MSISDN IE.
+func decodeBCDNumberLV(t *testing.T, lv []byte) string {
+	t.Helper()
+	if len(lv) < 1 || len(lv) < int(lv[0])+1 {
+		t.Fatalf("BCD LV %x: length byte %d does not fit (gsm48_decode_bcd_number2 returns -EINVAL)", lv, lv[0])
+	}
+	const digits = "0123456789*#abc"
+	var out []byte
+	for _, b := range lv[1 : 1+int(lv[0])] {
+		for _, n := range []byte{b & 0x0F, b >> 4} {
+			if n == 0x0F {
+				return string(out)
+			}
+			out = append(out, digits[n])
+		}
+	}
+	return string(out)
+}
+
+func TestGSUP_EncodeMSISDN(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string // hex
+	}{
+		{"13342012832", "0631430221 38f2"},
+		{"+13342012832", "0631430221 38f2"},
+		{"1234", "022143"},
+		{"5", "01f5"},
+	}
+	for _, c := range cases {
+		got, err := encodeMSISDN(c.in)
+		if err != nil {
+			t.Fatalf("encodeMSISDN(%q): %v", c.in, err)
+		}
+		want, _ := hex.DecodeString(strings.ReplaceAll(c.want, " ", ""))
+		if !bytes.Equal(got, want) {
+			t.Errorf("encodeMSISDN(%q) = %x, want %x", c.in, got, want)
+		}
+		if back := decodeBCDNumberLV(t, got); back != strings.TrimPrefix(c.in, "+") {
+			t.Errorf("round trip %q: got %q", c.in, back)
+		}
+	}
+	for _, bad := range []string{"", "+", "12a4", "tel:123"} {
+		if _, err := encodeMSISDN(bad); err == nil {
+			t.Errorf("encodeMSISDN(%q): expected error", bad)
+		}
+	}
+}
+
+func TestGSUP_ParseIDResp(t *testing.T) {
+	payload := idRespPayload(map[byte]string{
+		ipaTagSerial:   "",
+		ipaTagUnitID:   "0/0/0",
+		ipaTagUnitName: "MSC-00-00-00-00-00-00",
+	}, ipaTagSerial, ipaTagUnitID, ipaTagUnitName)
+	if got := parseIDResp(payload); got != "MSC-00-00-00-00-00-00" {
+		t.Fatalf("parseIDResp: got %q", got)
+	}
+	if got := parseIDResp(idRespPayload(map[byte]string{ipaTagUnitID: "0/0/0"}, ipaTagUnitID)); got != "" {
+		t.Fatalf("parseIDResp without unit name: got %q", got)
+	}
+}
+
+// TestGSUP_WireCodes pins the IPA and GSUP codes to libosmocore 1.13.1
+// (ipaccess.h, gsup.h); OsmoMSC drops or misreads anything else.
+func TestGSUP_WireCodes(t *testing.T) {
+	codes := []struct {
+		name      string
+		got, want byte
+	}{
+		{"IPAC_PROTO_IPACCESS", ipaProtoCCM, 0xFE},
+		{"IPAC_PROTO_OSMO", ipaProtoOSMO, 0xEE},
+		{"IPAC_PROTO_EXT_GSUP", ipaExtGSUP, 0x05},
+		{"UPDATE_LOCATION_REQUEST", MsgUpdateLocReq, 0x04},
+		{"SEND_AUTH_INFO_REQUEST", MsgSendAuthInfoReq, 0x08},
+		{"AUTH_FAIL_REPORT", MsgAuthFailureReport, 0x0B},
+		{"PURGE_MS_REQUEST", MsgPurgeMSReq, 0x0C},
+		{"PURGE_MS_RESULT", MsgPurgeMSRes, 0x0E},
+		{"INSERT_DATA_REQUEST", MsgInsertDataReq, 0x10},
+		{"INSERT_DATA_RESULT", MsgInsertDataRes, 0x12},
+		{"LOCATION_CANCEL_REQUEST", MsgLocationCancelReq, 0x1C},
+		{"FREEZE_PTMSI_IE", IEFreezePTMSI, 0x07},
+		{"MSISDN_IE", IEMSISDNTag, 0x08},
+		{"MESSAGE_CLASS_IE", IEMessageClass, 0x0A},
+		{"PDP_CONTEXT_ID_IE", IEPDPContextID, 0x10},
+		{"CHARG_CHAR_IE", IEChargingChar, 0x14},
+		{"CN_DOMAIN_IE", IECNDomain, 0x28},
+		{"CURRENT_RAT_TYPE_IE", IECurrentRATType, 0x2A},
+		{"NUM_VECTORS_REQ_IE", IENumberOfRequestedVec, 0x52},
+	}
+	for _, c := range codes {
+		if c.got != c.want {
+			t.Errorf("%s: got 0x%02X, want 0x%02X", c.name, c.got, c.want)
+		}
+	}
 }
 
 func TestGSUP_IMSIEncodeDecode(t *testing.T) {

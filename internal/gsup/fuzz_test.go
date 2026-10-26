@@ -40,9 +40,10 @@ func FuzzDecode(f *testing.F) {
 
 func FuzzParseIDResp(f *testing.F) {
 	f.Add([]byte{ccmMsgIDResp})
-	f.Add([]byte{ccmMsgIDResp, 0x05, ipaTagUnitName, 'h', 's', 's', 0})
-	f.Add([]byte{ccmMsgIDResp, 0x01, ipaTagUnitName})
-	f.Add([]byte{ccmMsgIDResp, 0x02, ipaTagSerial, '1'})
+	f.Add([]byte{ccmMsgIDResp, 0x00, 0x05, ipaTagUnitName, 'h', 's', 's', 0})
+	f.Add([]byte{ccmMsgIDResp, 0x00, 0x01, ipaTagUnitName})
+	f.Add([]byte{ccmMsgIDResp, 0x00, 0x02, ipaTagSerial, '1'})
+	f.Add([]byte{ccmMsgIDResp, 0xFF, 0xFF, ipaTagUnitName, 'x'})
 	f.Add([]byte{'0', 0, '0'})
 
 	f.Fuzz(func(t *testing.T, payload []byte) {
