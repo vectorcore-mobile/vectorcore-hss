@@ -15,6 +15,7 @@ import (
 	"github.com/svinson1121/vectorcore-hss/internal/diameter/basedict"
 	"github.com/svinson1121/vectorcore-hss/internal/diameter/gx"
 	"github.com/svinson1121/vectorcore-hss/internal/models"
+	"github.com/svinson1121/vectorcore-hss/internal/policy"
 	"github.com/svinson1121/vectorcore-hss/internal/repository"
 )
 
@@ -173,7 +174,7 @@ func TestAARAudioStillInstallsRule(t *testing.T) {
 	audio := uint32(MediaTypeAudio)
 	mc := mediaComponent(1, &audio,
 		mediaSub{fds: []string{"permit out 17 from 10.46.0.1 40000 to 10.46.0.26 50000"}},
-		mediaSub{flowUsage: uptr(1), fds: []string{"permit out 17 from 10.46.0.1 40001 to 10.46.0.26 50001"}}, // RTCP
+		mediaSub{flowUsage: uptr(FlowUsageRTCP), fds: []string{"permit out 17 from 10.46.0.1 40001 to 10.46.0.26 50001"}}, // RTCP
 	)
 	peers, _ := runAAR(t, buildAAR(t, "pcscf;1;call", mc))
 	if peers.lookups != 1 {
@@ -183,7 +184,7 @@ func TestAARAudioStillInstallsRule(t *testing.T) {
 
 func TestIsSignallingComponent(t *testing.T) {
 	sig := datatype.Enumerated(FlowUsageAFSignalling)
-	rtcp := datatype.Enumerated(1)
+	rtcp := datatype.Enumerated(FlowUsageRTCP)
 	for _, c := range []struct {
 		name string
 		mc   MediaComponentDescription
@@ -199,7 +200,7 @@ func TestIsSignallingComponent(t *testing.T) {
 			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
 		}
 	}
-	if qci, _, _, _, _ := mediaTypeQoSDefaults(MediaTypeControl); qci != 0 {
-		t.Errorf("CONTROL still maps to QCI %d", qci)
+	if q, ok := policy.IMSMediaQoSFor(rxIMSMediaType(MediaTypeControl)); ok {
+		t.Errorf("CONTROL still maps to QCI %d", q.QCI)
 	}
 }

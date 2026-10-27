@@ -1,8 +1,8 @@
 .PHONY: build clean deps fuzz install uninstall ui dev-ui diamtest
 
 BINARY=hss
-APP_VERSION=1.2.4
-API_VERSION=1.4.1
+APP_VERSION=1.2.5
+API_VERSION=1.4.2
 VERSION_PKG=github.com/svinson1121/vectorcore-hss/internal/version
 GO_LDFLAGS=-X $(VERSION_PKG).AppVersion=$(APP_VERSION) -X $(VERSION_PKG).APIVersion=$(API_VERSION)
 FUZZ_TIME?=30s

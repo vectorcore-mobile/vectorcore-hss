@@ -13,6 +13,7 @@ const (
 	MediaTypeOther   = 0xFFFFFFFF
 
 	// Flow-Usage values (3GPP TS 29.214 §5.3.12)
+	FlowUsageRTCP         = 1
 	FlowUsageAFSignalling = 2
 
 	// Subscription-Id-Type values

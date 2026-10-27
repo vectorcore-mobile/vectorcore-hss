@@ -13,6 +13,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/svinson1121/vectorcore-hss/internal/diameter/avputil"
+	"github.com/svinson1121/vectorcore-hss/internal/policy"
 	"github.com/svinson1121/vectorcore-hss/internal/repository"
 )
 
@@ -87,10 +88,11 @@ func (h *Handlers) AAR(conn diam.Conn, msg *diam.Message) (*diam.Message, error)
 		if isSignallingComponent(mc) {
 			continue
 		}
-		qci, gbr, defaultBW, arpPrio, prec := mediaTypeQoSDefaults(int(mc.MediaType))
-		if qci == 0 {
+		q, ok := policy.IMSMediaQoSFor(rxIMSMediaType(mc.MediaType))
+		if !ok {
 			continue
 		}
+		defaultBW := q.DefaultBW
 		bwDL := uint32(mc.MaxRequestedBWDL)
 		bwUL := uint32(mc.MaxRequestedBWUL)
 		if bwDL == 0 {
@@ -127,12 +129,12 @@ func (h *Handlers) AAR(conn diam.Conn, msg *diam.Message) (*diam.Message, error)
 		}
 		rules = append(rules, bearerRule{
 			name:          rxChargingRuleName(sessionID, uint32(mc.MediaComponentNumber)),
-			qci:           uint32(qci),
+			qci:           uint32(q.QCI),
 			bwDL:          bwDL,
 			bwUL:          bwUL,
-			gbr:           gbr,
-			arpPriority:   arpPrio,
-			precedence:    prec,
+			gbr:           q.GBR,
+			arpPriority:   q.ARPPriority,
+			precedence:    q.Precedence,
 			subComponents: subComponents,
 		})
 	}
@@ -332,54 +334,38 @@ func (h *Handlers) sendGxRARRemove(pgwPeer, pgwRealm, gxSessionID string, ruleNa
 	return err
 }
 
-// mediaTypeQoSDefaults maps an Rx Media-Type to QoS parameters for the Gx RAR.
-//
-// Returns:
-//
-//	qci        — Gx QCI value (0 = no dedicated bearer for this type)
-//	gbr        — true if a GBR bearer is required (QCI 1–4)
-//	defaultBW  — default MBR/GBR in bps, applied when the P-CSCF omits bandwidth AVPs
-//	arpPriority — ARP Priority-Level per 3GPP TS 23.203 Table 6.1.7
-//	precedence  — charging rule precedence (lower = higher priority)
-//
-// ARP values are per 3GPP TS 23.203 §6.1.7 QCI characteristics:
-//
-//	QCI 1 (voice): priority 2 → use 14 per common operator practice
-//	QCI 2 (video): priority 4 → use 11 per common operator practice
-//
-// CONTROL (SIP signalling) gets no rule: it uses the IMS APN's default bearer
-// and the QoS configured on that APN.
-//
-// Pre-Emption-Capability is always DISABLED and Pre-Emption-Vulnerability is
-// always ENABLED for these dedicated IMS bearers (set at call site).
-func mediaTypeQoSDefaults(mediaType int) (qci int, gbr bool, defaultBW, arpPriority, precedence uint32) {
-	switch mediaType {
+// rxIMSMediaType maps an Rx Media-Type (TS 29.214 §5.3.19) to the shared
+// IMS media type. An absent Media-Type unmarshals as AUDIO (0).
+func rxIMSMediaType(mt datatype.Enumerated) policy.IMSMediaType {
+	switch mt {
 	case MediaTypeAudio:
-		return 1, true, 128000, 14, 40 // QCI 1 — GBR VoLTE voice, 128 kbps
+		return policy.IMSMediaAudio
 	case MediaTypeVideo:
-		return 2, true, 512000, 11, 30 // QCI 2 — GBR VoLTE video, 512 kbps
+		return policy.IMSMediaVideo
+	case MediaTypeControl:
+		return policy.IMSMediaControl
 	default:
-		return 0, false, 0, 0, 0 // no dedicated bearer
+		return policy.IMSMediaOther
 	}
 }
 
 // isSignallingComponent reports whether a media component describes AF
-// signalling: Media-Type CONTROL, or every sub-component marked Flow-Usage
-// AF_SIGNALLING (TS 29.214 §5.3.12), which P-CSCFs send at registration with
-// or without a Media-Type.
+// signalling (see policy.IsIMSSignalling).
 func isSignallingComponent(mc MediaComponentDescription) bool {
-	if mc.MediaType == MediaTypeControl {
-		return true
-	}
-	if len(mc.MediaSubComponents) == 0 {
-		return false
-	}
+	usages := make([]policy.IMSFlowUsage, 0, len(mc.MediaSubComponents))
 	for _, sc := range mc.MediaSubComponents {
-		if sc.FlowUsage == nil || *sc.FlowUsage != FlowUsageAFSignalling {
-			return false
+		u := policy.IMSFlowUsageNoInfo
+		if sc.FlowUsage != nil {
+			switch *sc.FlowUsage {
+			case FlowUsageRTCP:
+				u = policy.IMSFlowUsageRTCP
+			case FlowUsageAFSignalling:
+				u = policy.IMSFlowUsageAFSignalling
+			}
 		}
+		usages = append(usages, u)
 	}
-	return true
+	return policy.IsIMSSignalling(rxIMSMediaType(mc.MediaType), usages)
 }
 
 // extractSubscriberID returns the best subscriber identity string from the
