@@ -199,6 +199,7 @@ VectorCore HSS includes 5G **UDM, UDR, and PCF** services on the SBI (Service Ba
 - **Subscription data** — AMF/SMF fetch AMBR, NSSAI, and DNN configs via `nudm-sdm`
 - **UE context management** — AMF/SMF register/deregister serving nodes via `nudm-uecm`
 - **Policy control** — AMF and SMF call `npcf-am-policy-control` and `npcf-smpolicycontrol` for AM and session policy decisions
+- **VoNR QoS (N5)** — the P-CSCF calls `npcf-policyauthorization` to authorise call media; the PCF pushes the voice/video QoS flows to the SMF
 
 ### Protocol
 - Transport: **HTTP/2** (h2c cleartext for lab, TLS+h2 for production)
@@ -212,12 +213,24 @@ VectorCore HSS includes 5G **UDM, UDR, and PCF** services on the SBI (Service Ba
 | 3GPP ref | SBI name | URL Prefix | Caller | Description |
 |----------|---------|-----------|--------|-------------|
 | N13 | nudm-ueau | `/nudm-ueau/v{1,2}/{supi}` | AUSF | Generate 5G-AKA auth vectors (RAND/AUTN/XRES*/KAUSF) |
-| N8  | nudm-sdm  | `/nudm-sdm/v{1,2}/{supi}`  | AMF | AM-data, NSSAI, SDM subscriptions |
+| N8  | nudm-sdm  | `/nudm-sdm/v{1,2}/{supi}`  | AMF | GetDataSets, AM-data, NSSAI, SDM subscriptions |
 | N10 | nudm-sdm  | `/nudm-sdm/v{1,2}/{supi}`  | SMF | SM-data, SMF-select-data |
 | N8/N10 | nudm-uecm | `/nudm-uecm/v1/{supi}` | AMF, SMF | Register/deregister serving AMF and PDU sessions |
 | N36 | nudr-dr   | `/nudr-dr/v{1,2}/policy-data/ues/{ueId}` | PCF | AM policy data, SM policy data, UE policy set, SMS management |
 | N7 | npcf-am-policy-control | `/npcf-am-policy-control/v1/policies` | AMF | AM policy create/update/delete |
 | N7 | npcf-smpolicycontrol | `/npcf-smpolicycontrol/v1/sm-policies` | SMF | SM policy create/update/delete |
+| N5 | npcf-policyauthorization | `/npcf-policyauthorization/v1/app-sessions` | P-CSCF (AF) | IMS app session create/update/delete → call QoS flows |
+
+### N5 policy authorization (VoNR)
+
+The P-CSCF (tested against the docker_open5gs Kamailio `WITH_N5` script, directly or through the SCP) creates an app session for each IMS registration and each call:
+
+- **Binding** — the app session is matched to the UE's IMS PDU session by `ueIpv4` (or `ueIpv6` within the session's prefix) and `dnn`, never by `supi`/`gpsi` (Kamailio sends the caller's MSISDN on MT calls).
+- **Registration / signalling** — components with `medType: CONTROL` or all sub-components `flowUsage: AF_SIGNALLING` get `201` and **no** QoS flow: SIP uses the PDU session's default QoS flow (the DNN's 5QI/ARP). This is accepted even when no PDU session matches, so the P-CSCF does not fail the REGISTER.
+- **Call media** — each AUDIO/VIDEO component becomes one PCC rule, with the same QoS VoLTE gets over Rx: audio 5QI 1 / ARP 14 / GBR, video 5QI 2 / ARP 11 / GBR. GBR = MBR = `marBwDl`/`marBwUl` (component, else the largest sub-component value); `0 Kbps` or absent means the default (audio 128 Kbps, video 512 Kbps), which is also the cap. `permit in … from A to B` flows are sent as `permit out … from B to A` with direction `UPLINK`. Call media with no matching PDU session is rejected with `500 PDU_SESSION_NOT_AVAILABLE`.
+- **SMF update** — rules go to the SMF as a delta `SmPolicyUpdateNotify` (`{notificationUri}/update`) holding only the app session's `pccRules`/`qosDecs` (rule and QoS id `n5-{appSessionId}-{medCompN}`); a re-INVITE sends only what changed, and delete sends the rules as `null` to remove them.
+- **PDU session release** — app sessions of a deleted SM policy are dropped and the AF is notified at `{notifUri}/terminate` (`termCause: PDU_SESSION_TERMINATION`).
+- OAuth2: the docker_open5gs P-CSCF sends no bearer token, so with `oauth2_enabled` set it needs `oauth2_bypass`.
 
 ### 5G-AKA key derivation
 
@@ -238,8 +251,8 @@ The following fields on the `subscriber` record are relevant to the UDM:
 | Field | JSON key | Description |
 |-------|----------|-------------|
 | `nssai` | `nssai` | Allowed S-NSSAIs as a JSON array, e.g. `[{"sst":1},{"sst":2,"sd":"000001"}]`. Defaults to `[{"sst":1}]` (eMBB) when null. |
-| `ue_ambr_dl` | `ue_ambr_dl` | UE aggregate max bit rate downlink (kbps). Returned in am-data as `subscribedUeAmbr`. |
-| `ue_ambr_ul` | `ue_ambr_ul` | UE aggregate max bit rate uplink (kbps). |
+| `ue_ambr_dl` | `ue_ambr_dl` | UE aggregate max bit rate downlink (bps). Returned in am-data as `subscribedUeAmbr`. |
+| `ue_ambr_ul` | `ue_ambr_ul` | UE aggregate max bit rate uplink (bps). |
 | `apn_list` | `apn_list` | Comma-separated APN IDs. Each APN becomes a DNN config in sm-data. |
 | `msisdn` | `msisdn` | If set, returned as a GPSI (`msisdn-{number}`) in am-data. |
 | `serving_amf` | `serving_amf` | Serving AMF address (written by nudm-uecm PUT, read-only). |
@@ -273,7 +286,7 @@ Data sources — all derived from existing tables, no new DB columns required:
 
 | Response field | Source |
 |----------------|--------|
-| `subscribedUeAmbr` | `subscriber.ue_ambr_ul` / `ue_ambr_dl` (kbps → string) |
+| `subscribedUeAmbr` | `subscriber.ue_ambr_ul` / `ue_ambr_dl` (bps → TS 29.571 BitRate string) |
 | `sessionAmbr` | `apn.apn_ambr_ul` / `apn_ambr_dl` per DNN |
 | `singleNssai` | `subscriber.nssai` JSON array |
 | `5qi` / `arp` | `apn.qci`, `apn.arp_priority`, `apn.arp_preemption_*` |
@@ -1921,6 +1934,7 @@ curl -s -X POST $BASE/subscriber \
 | GET | `/api/v1/oam/sbi/peers` | List connected and forwarded SBI peers |
 | GET | `/nudm-ueau/v{1,2}/{supi}/security-information/generate-auth-data` | **5G N13** — AUSF: generate 5G-AKA vectors |
 | POST | `/nudm-ueau/v{1,2}/{supi}/auth-events` | **5G N13** — AUSF: auth event notification |
+| GET | `/nudm-sdm/v{1,2}/{supi}?dataset-names=…` | **5G N8/N10** — GetDataSets: multiple data sets in one call (`AM`, `SMF_SEL`, `UEC_SMF`, `SM`; others skipped). Used by Open5GS AMF since 2026-07 |
 | GET | `/nudm-sdm/v{1,2}/{supi}/am-data` | **5G N8** — AMF: AM subscription data |
 | GET | `/nudm-sdm/v{1,2}/{supi}/sm-data` | **5G N10** — SMF: SM subscription data |
 | GET | `/nudm-sdm/v{1,2}/{supi}/smf-select-data` | **5G N10** — SMF: SMF selection data |
@@ -1939,6 +1953,10 @@ curl -s -X POST $BASE/subscriber \
 | GET | `/nudr-dr/v{1,2}/policy-data/sms-management-data/{ueId}` | **5G N36** — PCF: SMS management flags |
 | POST | `/npcf-am-policy-control/v1/policies` | **5G N7** — AMF: create AM policy association |
 | POST | `/npcf-smpolicycontrol/v1/sm-policies` | **5G N7** — SMF: create SM policy association |
+| POST | `/npcf-policyauthorization/v1/app-sessions` | **5G N5** — P-CSCF: create IMS app session (201 + Location) |
+| GET | `/npcf-policyauthorization/v1/app-sessions/{appSessionId}` | **5G N5** — read app session |
+| PATCH | `/npcf-policyauthorization/v1/app-sessions/{appSessionId}` | **5G N5** — P-CSCF: update media (re-INVITE/UPDATE; merge-patch, `null` component removes it) |
+| POST | `/npcf-policyauthorization/v1/app-sessions/{appSessionId}/delete` | **5G N5** — P-CSCF: delete app session (BYE/CANCEL) |
 | GET | `/health` | UDM/UDR liveness probe |
 | GET | `/api/v1/oam/emergency_subscriber/{id}` | Get emergency session by ID |
 | GET | `/api/v1/oam/backup` | Export full database backup (JSON download) |

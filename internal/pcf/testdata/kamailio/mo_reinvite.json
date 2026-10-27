@@ -1,0 +1,48 @@
+{
+	"ascReqData": {
+		"afAppId": "+g.3gpp.icsi-ref=\"urn%3Aurn-7%3A3gpp-service.ims.icsi.mmtel\"",
+		"dnn": "ims",
+		"medComponents": {
+			"0": {
+				"medCompN": 1,
+				"medType": "AUDIO",
+				"codecs": [
+					"downlink\n0\n",
+					"uplink\n0\n"
+				],
+				"medSubComps": {
+					"0": {
+						"fNum": 1,
+						"fDescs": [
+							"permit out 17 from 10.46.0.27 40010 to 10.46.0.26 50000",
+							"permit in 17 from 10.46.0.26 50000 to 10.46.0.27 40010",
+							"permit out 17 from 10.46.0.27 40011 to 10.46.0.26 50001",
+							"permit in 17 from 10.46.0.26 50001 to 10.46.0.27 40011"
+						],
+						"fStatus": "ENABLED",
+						"marBwDl": "38 Kbps",
+						"marBwUl": "38 Kbps",
+						"flowUsage": "NO_INFO"
+					}
+				}
+			}
+		},
+		"evSubsc": {
+			"events": [
+				{
+					"event": "QOS_NOTIF",
+					"notifMethod": "PERIODIC"
+				},
+				{
+					"event": "ANI_REPORT",
+					"notifMethod": "ONE_TIME"
+				}
+			]
+		},
+		"notifUri": "http://10.46.0.1:7777",
+		"sponStatus": "SPONSOR_DISABLED",
+		"gpsi": "msisdn-0012345601",
+		"suppFeat": "2",
+		"ueIpv4": "10.46.0.26"
+	}
+}

@@ -26,3 +26,33 @@ func TestFormatBitRate(t *testing.T) {
 		}
 	}
 }
+
+func TestParseBitRate(t *testing.T) {
+	good := map[string]uint64{
+		"0 Kbps":     0, // Kamailio N5 sends this when the SDP has no b=AS
+		"38 Kbps":    38000,
+		"128 Kbps":   128000,
+		"1.5 Mbps":   1500000,
+		"999 bps":    999,
+		"2 Gbps":     2000000000,
+		" 64 Kbps ":  64000,
+		"0.001 Kbps": 1,
+	}
+	for in, want := range good {
+		got, err := ParseBitRate(in)
+		if err != nil || got != want {
+			t.Errorf("ParseBitRate(%q) = %d, %v; want %d", in, got, err, want)
+		}
+	}
+	for _, in := range []string{"", "128", "128Kbps", "128 kbps", "-1 Kbps", "x Kbps", "NaN Kbps", "1e300 Tbps"} {
+		if got, err := ParseBitRate(in); err == nil {
+			t.Errorf("ParseBitRate(%q) = %d, want error", in, got)
+		}
+	}
+	// Round-trip with FormatBitRate.
+	for _, bps := range []int{1, 999, 1000, 38000, 128000, 1500000} {
+		if got, err := ParseBitRate(FormatBitRate(bps)); err != nil || got != uint64(bps) {
+			t.Errorf("round trip %d: got %d, %v", bps, got, err)
+		}
+	}
+}

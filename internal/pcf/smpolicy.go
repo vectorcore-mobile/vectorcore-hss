@@ -31,6 +31,9 @@ type smPolicyContextData struct {
 	SubsDefQos              *qos            `json:"subsDefQos,omitempty"`
 	ChargingCharacteristics string          `json:"chargingCharacteristics,omitempty"`
 	SuppFeat                string          `json:"suppFeat,omitempty"`
+	// UE address, used to bind N5 app sessions (TS 29.513 §5.2).
+	Ipv4Address       string `json:"ipv4Address,omitempty"`
+	Ipv6AddressPrefix string `json:"ipv6AddressPrefix,omitempty"`
 }
 
 type smPolicyDecision struct {
@@ -93,9 +96,10 @@ type chargingDecs struct {
 }
 
 type smPolicyAssociation struct {
-	ID       string
-	Context  smPolicyContextData
-	Decision smPolicyDecision
+	ID          string
+	ResourceURI string // absolute URI returned to the SMF in Location
+	Context     smPolicyContextData
+	Decision    smPolicyDecision
 }
 
 type smPolicyNotification struct {
@@ -121,6 +125,8 @@ type smPolicyUpdateData struct {
 	SubsDefQos              *qos             `json:"subsDefQos,omitempty"`
 	ChargingCharacteristics *string          `json:"chargingCharacteristics,omitempty"`
 	SuppFeat                *string          `json:"suppFeat,omitempty"`
+	Ipv4Address             *string          `json:"ipv4Address,omitempty"`
+	Ipv6AddressPrefix       *string          `json:"ipv6AddressPrefix,omitempty"`
 }
 
 func (s *Server) registerSMPolicyRoutes(r chi.Router) {
@@ -149,11 +155,12 @@ func (s *Server) handleSMPolicyCreate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"cause":"SYSTEM_FAILURE"}`, http.StatusInternalServerError)
 		return
 	}
+	location := absoluteAssociationURL(r, assoc.ID)
+	assoc.ResourceURI = location
 	s.assocMu.Lock()
 	s.associations[assoc.ID] = assoc
 	s.assocMu.Unlock()
 
-	location := absoluteAssociationURL(r, assoc.ID)
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Location", location)
 	w.WriteHeader(http.StatusCreated)
@@ -168,7 +175,7 @@ func (s *Server) handleSMPolicyGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(assoc.Decision)
+	json.NewEncoder(w).Encode(s.decisionWithAppRules(assoc))
 }
 
 func (s *Server) handleSMPolicyUpdate(w http.ResponseWriter, r *http.Request) {
@@ -189,16 +196,20 @@ func (s *Server) handleSMPolicyUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	refreshed.ID = id
+	refreshed.ResourceURI = assoc.ResourceURI
 	s.assocMu.Lock()
 	s.associations[id] = refreshed
 	s.assocMu.Unlock()
+	// The decision rebuilt from the DB carries no N5 rules; keep them so the
+	// SMF's view of the session matches ours.
+	decision := s.decisionWithAppRules(refreshed)
 	s.notifySMPolicyUpdate(r.Context(), refreshed.Context.NotificationURI, smPolicyNotification{
 		ResourceURI:      absoluteAssociationURL(r, id),
-		SmPolicyDecision: &refreshed.Decision,
+		SmPolicyDecision: &decision,
 	})
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(refreshed.Decision)
+	json.NewEncoder(w).Encode(decision)
 }
 
 func (s *Server) handleSMPolicyDelete(w http.ResponseWriter, r *http.Request) {
@@ -215,6 +226,8 @@ func (s *Server) handleSMPolicyDelete(w http.ResponseWriter, r *http.Request) {
 		ResourceURI: absoluteAssociationURL(r, id),
 		Cause:       "UNSPECIFIED",
 	})
+	// The PDU session is gone, so are its N5 app sessions.
+	s.terminateAppSessionsFor(id)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -293,6 +306,11 @@ func (s *Server) getAssociation(id string) (*smPolicyAssociation, bool) {
 func int32ptr(v int32) *int32 { return &v }
 
 func absoluteAssociationURL(r *http.Request, id string) string {
+	return fmt.Sprintf("%s/npcf-smpolicycontrol/v1/sm-policies/%s", requestBaseURL(r), id)
+}
+
+// requestBaseURL is the scheme://authority the request was addressed to.
+func requestBaseURL(r *http.Request) string {
 	scheme := "http"
 	if r.TLS != nil {
 		scheme = "https"
@@ -300,7 +318,7 @@ func absoluteAssociationURL(r *http.Request, id string) string {
 	if xf := strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")); xf != "" {
 		scheme = xf
 	}
-	return fmt.Sprintf("%s://%s/npcf-smpolicycontrol/v1/sm-policies/%s", scheme, r.Host, id)
+	return scheme + "://" + r.Host
 }
 
 func chooseAMBR(in, fallback *ambr) *ambr {
@@ -387,35 +405,40 @@ func (s *Server) notifySMPolicyTerminate(ctx context.Context, target string, pay
 }
 
 func (s *Server) notifySMPolicy(ctx context.Context, target string, payload any) {
+	s.sendCallback(ctx, target, payload, "SMF", "nsmf-callback")
+}
+
+// sendCallback POSTs a JSON notification to a callback URI (SMF or AF).
+func (s *Server) sendCallback(ctx context.Context, target string, payload any, targetNFType, targetService string) {
 	if strings.TrimSpace(target) == "" {
 		return
 	}
 	raw, err := json.Marshal(payload)
 	if err != nil {
-		s.log.Warn("pcf: marshal SM policy notification failed", zap.Error(err))
+		s.log.Warn("pcf: marshal notification failed", zap.String("target", target), zap.Error(err))
 		return
 	}
 	req, err := s.sbiClient.NewRequestWithOptions(ctx, http.MethodPost, target, bytes.NewReader(raw), sbi.RequestOptions{
 		RequesterNFType:       "PCF",
 		RequesterNFInstanceID: s.cfg.NFInstanceID,
-		TargetNFType:          "SMF",
-		TargetServiceName:     "nsmf-callback",
+		TargetNFType:          targetNFType,
+		TargetServiceName:     targetService,
 	})
 	if err != nil {
-		s.log.Warn("pcf: build SM policy notification failed", zap.String("target", target), zap.Error(err))
+		s.log.Warn("pcf: build notification failed", zap.String("target", target), zap.Error(err))
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", sbi.FormatRequesterUserAgent("PCF", s.cfg.NFInstanceID))
 	resp, err := s.sbiClient.Do(req)
 	if err != nil {
-		s.log.Warn("pcf: send SM policy notification failed", zap.String("target", target), zap.Error(err))
+		s.log.Warn("pcf: send notification failed", zap.String("target", target), zap.Error(err))
 		return
 	}
 	defer resp.Body.Close()
 	io.Copy(io.Discard, resp.Body)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		s.log.Warn("pcf: SM policy notification rejected", zap.String("target", target), zap.Int("status_code", resp.StatusCode))
+		s.log.Warn("pcf: notification rejected", zap.String("target", target), zap.Int("status_code", resp.StatusCode))
 	}
 }
 
@@ -475,6 +498,12 @@ func applySMPolicyUpdate(base smPolicyContextData, update smPolicyUpdateData) sm
 	}
 	if update.SuppFeat != nil {
 		out.SuppFeat = *update.SuppFeat
+	}
+	if update.Ipv4Address != nil {
+		out.Ipv4Address = *update.Ipv4Address
+	}
+	if update.Ipv6AddressPrefix != nil {
+		out.Ipv6AddressPrefix = *update.Ipv6AddressPrefix
 	}
 	return out
 }

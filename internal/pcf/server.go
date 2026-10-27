@@ -33,6 +33,9 @@ type Server struct {
 	associations map[string]*smPolicyAssociation
 	assocSeq     atomic.Uint64
 	amPolicy     *amPolicyStore
+	appMu        sync.Mutex
+	appSessions  map[string]*appSession // N5 app session id → session
+	appSeq       atomic.Uint64
 }
 
 func New(cfg config.PCFConfig, store repository.Repository, log *zap.Logger) *Server {
@@ -50,6 +53,7 @@ func New(cfg config.PCFConfig, store repository.Repository, log *zap.Logger) *Se
 		fpt:          peertracker.NewWithMaxAge(2 * time.Minute),
 		associations: make(map[string]*smPolicyAssociation),
 		amPolicy:     newAMPolicyStore(),
+		appSessions:  make(map[string]*appSession),
 	}
 }
 
@@ -137,6 +141,7 @@ func (s *Server) connState(transport string) func(net.Conn, http.ConnState) {
 func (s *Server) mountRoutes(r *chi.Mux) {
 	s.registerSMPolicyRoutes(r)
 	s.registerAMPolicyRoutes(r)
+	s.registerPolicyAuthRoutes(r)
 	r.Get("/health", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"status":"ok","nf":"PCF"}`))

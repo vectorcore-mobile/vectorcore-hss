@@ -1,0 +1,34 @@
+{
+	"ascReqData": {
+		"afAppId": "+g.3gpp.icsi-ref=\"urn%3Aurn-7%3A3gpp-service.ims.icsi.mmtel\"",
+		"dnn": "ims",
+		"medComponents": {
+			"0": {
+				"medCompN": 0,
+				"medType": "CONTROL",
+				"medSubComps": {
+					"0": {
+						"fNum": 0,
+						"fDescs": [
+							"permit out ip from 10.46.0.1 5060 to 10.46.0.26 5060",
+							"permit in ip from 10.46.0.26 5060 to 10.46.0.1 5060"
+						],
+						"fStatus": "ENABLED",
+						"flowUsage": "AF_SIGNALLING"
+					}
+				}
+			}
+		},
+		"evSubsc": {
+			"events": [
+				{"event": "QOS_NOTIF", "notifMethod": "PERIODIC"},
+				{"event": "ANI_REPORT", "notifMethod": "ONE_TIME"}
+			]
+		},
+		"notifUri": "http://10.46.0.1:7777",
+		"sponStatus": "SPONSOR_DISABLED",
+		"supi": "imsi-001010000000001",
+		"suppFeat": "2",
+		"ueIpv4": "10.46.0.26"
+	}
+}

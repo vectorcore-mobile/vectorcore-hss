@@ -22,6 +22,8 @@ func (s *Server) startNRFRegistration() {
 	services := []sbi.NFService{
 		sbi.MakeService("npcf-smpolicycontrol", scheme, ourIP, s.cfg.BindPort, []string{"v1"}),
 		sbi.MakeService("npcf-am-policy-control", scheme, ourIP, s.cfg.BindPort, []string{"v1"}),
+		// N5: the P-CSCF reaches us through the SCP by this service name.
+		sbi.MakeService("npcf-policyauthorization", scheme, ourIP, s.cfg.BindPort, []string{"v1"}),
 	}
 
 	profile := sbi.NFProfile{
