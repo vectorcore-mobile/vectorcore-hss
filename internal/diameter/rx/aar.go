@@ -80,6 +80,13 @@ func (h *Handlers) AAR(conn diam.Conn, msg *diam.Message) (*diam.Message, error)
 	}
 	var rules []bearerRule
 	for _, mc := range aar.MediaComponents {
+		// AF signalling (the P-CSCF's SIP path) stays on the IMS APN's
+		// default bearer with the APN's QCI/ARP. A rule with its own QoS
+		// would not bind to that bearer and the P-GW would create a
+		// dedicated bearer at IMS registration.
+		if isSignallingComponent(mc) {
+			continue
+		}
 		qci, gbr, defaultBW, arpPrio, prec := mediaTypeQoSDefaults(int(mc.MediaType))
 		if qci == 0 {
 			continue
@@ -339,7 +346,9 @@ func (h *Handlers) sendGxRARRemove(pgwPeer, pgwRealm, gxSessionID string, ruleNa
 //
 //	QCI 1 (voice): priority 2 → use 14 per common operator practice
 //	QCI 2 (video): priority 4 → use 11 per common operator practice
-//	QCI 5 (IMS signalling): priority 1 → use 1
+//
+// CONTROL (SIP signalling) gets no rule: it uses the IMS APN's default bearer
+// and the QoS configured on that APN.
 //
 // Pre-Emption-Capability is always DISABLED and Pre-Emption-Vulnerability is
 // always ENABLED for these dedicated IMS bearers (set at call site).
@@ -349,11 +358,28 @@ func mediaTypeQoSDefaults(mediaType int) (qci int, gbr bool, defaultBW, arpPrior
 		return 1, true, 128000, 14, 40 // QCI 1 — GBR VoLTE voice, 128 kbps
 	case MediaTypeVideo:
 		return 2, true, 512000, 11, 30 // QCI 2 — GBR VoLTE video, 512 kbps
-	case MediaTypeControl:
-		return 5, false, 64000, 1, 50 // QCI 5 — non-GBR IMS signalling
 	default:
 		return 0, false, 0, 0, 0 // no dedicated bearer
 	}
+}
+
+// isSignallingComponent reports whether a media component describes AF
+// signalling: Media-Type CONTROL, or every sub-component marked Flow-Usage
+// AF_SIGNALLING (TS 29.214 §5.3.12), which P-CSCFs send at registration with
+// or without a Media-Type.
+func isSignallingComponent(mc MediaComponentDescription) bool {
+	if mc.MediaType == MediaTypeControl {
+		return true
+	}
+	if len(mc.MediaSubComponents) == 0 {
+		return false
+	}
+	for _, sc := range mc.MediaSubComponents {
+		if sc.FlowUsage == nil || *sc.FlowUsage != FlowUsageAFSignalling {
+			return false
+		}
+	}
+	return true
 }
 
 // extractSubscriberID returns the best subscriber identity string from the

@@ -12,6 +12,9 @@ const (
 	MediaTypeControl = 4
 	MediaTypeOther   = 0xFFFFFFFF
 
+	// Flow-Usage values (3GPP TS 29.214 §5.3.12)
+	FlowUsageAFSignalling = 2
+
 	// Subscription-Id-Type values
 	SubscriptionIDTypeIMSI   = 1
 	SubscriptionIDTypeMSISDN = 0
@@ -98,6 +101,7 @@ type STR struct {
 type MediaSubComponent struct {
 	FlowNumber       datatype.Unsigned32      `avp:"Flow-Number"`
 	FlowDescriptions []datatype.IPFilterRule  `avp:"Flow-Description"`
+	FlowUsage        *datatype.Enumerated     `avp:"Flow-Usage"`
 }
 
 // MediaComponentDescription carries SDP-derived media stream info from the P-CSCF.
