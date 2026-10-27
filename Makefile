@@ -1,4 +1,4 @@
-.PHONY: build clean deps fuzz install uninstall ui dev-ui diamtest
+.PHONY: build clean deps fuzz install uninstall ui dev-ui diamtest n5sim
 
 BINARY=hss
 APP_VERSION=1.3.0
@@ -25,6 +25,10 @@ dev-ui: ## Start Vite dev server (proxies API to localhost:8080)
 diamtest: ## Build the Diameter test/load client (air/ulr/pur/suite/load/storm)
 	mkdir -p bin
 	go build -o bin/diamtest ./cmd/diamtest
+
+n5sim: ## Build the N5 (VoNR) P-CSCF/SMF test client (suite/smf/register/call)
+	mkdir -p bin
+	go build -o bin/n5sim ./cmd/n5sim
 
 deps:
 	go mod tidy

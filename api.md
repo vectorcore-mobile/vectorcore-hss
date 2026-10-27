@@ -232,6 +232,25 @@ The P-CSCF (tested against the docker_open5gs Kamailio `WITH_N5` script, directl
 - **PDU session release** — app sessions of a deleted SM policy are dropped and the AF is notified at `{notifUri}/terminate` (`termCause: PDU_SESSION_TERMINATION`).
 - OAuth2: the docker_open5gs P-CSCF sends no bearer token, so with `oauth2_enabled` set it needs `oauth2_bypass`.
 
+#### Testing N5 with `n5sim`
+
+`n5sim` (`make n5sim`, source `cmd/n5sim`) sends the same requests as the Kamailio P-CSCF (HTTP/2 cleartext with prior knowledge, with the SCP discovery headers), so `-pcf` can be the PCF or the SCP. It can also play the SMF.
+
+Without a 5GC — `suite` plays both the SMF and the P-CSCF and checks each step (register, call, re-INVITE, BYE, video, PDU session release, no-session cases). The SUPI must be a provisioned subscriber with the `ims` APN; the UE address defaults to `192.0.2.26` so it cannot collide with a real PDU session. The PCF must be able to reach the callback listener (`--listen`, `--advertise`):
+
+```bash
+n5sim -pcf http://10.0.2.117:7777 suite --supi imsi-001010000000001 --listen :9090
+```
+
+With a real SMF/UPF (e.g. UERANSIM attached to the `ims` DNN) — take the UE's IMS address from the SMF log or `ip addr` on the UE's tun interface, then play the P-CSCF and watch the SMF create and remove the 5QI 1 QoS flow:
+
+```bash
+n5sim -pcf http://<scp-or-pcf>:7777 register --ue-ip 10.46.0.26
+n5sim -pcf http://<scp-or-pcf>:7777 call --ue-ip 10.46.0.26 --peer-ip 10.46.0.27 --hold 30s --reinvite
+```
+
+`n5sim smf --ue-ip …` creates an SM policy and prints every `SmPolicyUpdateNotify` the PCF sends until Ctrl-C (which releases it), for watching the decisions without an SMF. Add `-v` to any command to print every request, response and callback.
+
 ### 5G-AKA key derivation
 
 Auth vectors are computed on top of the subscriber's existing Milenage `Ki` and `OPc` (from the `auc` table):
