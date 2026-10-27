@@ -4,6 +4,7 @@ package gsup
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"strings"
 	"time"
@@ -71,25 +72,64 @@ func (s *Server) handleAIR(p *peer, msg *Msg) {
 		return
 	}
 
-	// Number of requested vectors (IE 0x29); default to 1.
-	numVec := 1
-	if ie := msg.Get(IENumberOfRequestedVec); ie != nil && len(ie.Data) > 0 {
+	// SQN resync: the MSC relays RAND (0x20) + AUTS (0x26) after the SIM
+	// reported a synch failure, as osmo-hlr's auc_compute_vectors handles.
+	randIE, autsIE := msg.Get(IERANDTag), msg.Get(IEAUTSTag)
+	if randIE != nil && autsIE != nil {
+		if len(randIE.Data) != 16 || len(autsIE.Data) != 14 {
+			s.log.Warn("gsup: AIR bad resync IEs", zap.String("imsi", imsi),
+				zap.Int("rand_len", len(randIE.Data)), zap.Int("auts_len", len(autsIE.Data)))
+			sendError(p, MsgSendAuthInfoErr, imsi, CauseNetworkFailure)
+			return
+		}
+		resync := append(append([]byte{}, randIE.Data...), autsIE.Data...)
+		newSQN, err := crypto.ResyncSQNFull(auc, profile, resync)
+		if err != nil {
+			s.log.Error("gsup: AIR resync failed", zap.String("imsi", imsi), zap.Error(err))
+			sendError(p, MsgSendAuthInfoErr, imsi, CauseNetworkFailure)
+			return
+		}
+		if err := s.store.ResyncSQN(ctx, auc.AUCID, newSQN+100); err != nil {
+			s.log.Error("gsup: AIR resync update failed", zap.String("imsi", imsi), zap.Error(err))
+			sendError(p, MsgSendAuthInfoErr, imsi, CauseNetworkFailure)
+			return
+		}
+		if auc, err = s.store.GetAUCByIMSI(ctx, imsi); err != nil {
+			s.log.Error("gsup: AIR resync reload failed", zap.String("imsi", imsi), zap.Error(err))
+			sendError(p, MsgSendAuthInfoErr, imsi, CauseNetworkFailure)
+			return
+		}
+		s.log.Info("gsup: AIR SQN resync", zap.String("imsi", imsi), zap.Int64("sqn_ms", newSQN))
+	}
+
+	// AMF bit 0 is the separation bit (TS 33.102 Annex H): osmo-hlr sets it
+	// for vectors used on E-UTRAN via SGs and clears it otherwise.
+	sepBit := false
+	if ie := msg.Get(IECurrentRATType); ie != nil && len(ie.Data) > 0 && ie.Data[0] == RATEUTRANSGs {
+		sepBit = true
+	}
+	vecAUC, err := withSeparationBit(auc, sepBit)
+	if err != nil {
+		s.log.Error("gsup: AIR bad AMF", zap.String("imsi", imsi), zap.Error(err))
+		sendError(p, MsgSendAuthInfoErr, imsi, CauseNetworkFailure)
+		return
+	}
+
+	// Number of requested vectors (IE 0x52); default to the GSUP maximum
+	// of 5, as osmo-hlr does.
+	numVec := maxAuthVectors
+	if ie := msg.Get(IENumberOfRequestedVec); ie != nil && len(ie.Data) > 0 &&
+		ie.Data[0] > 0 && int(ie.Data[0]) <= maxAuthVectors {
 		numVec = int(ie.Data[0])
-		if numVec < 1 {
-			numVec = 1
-		}
-		if numVec > 5 {
-			numVec = 5
-		}
 	}
 
 	resp := NewMsg(MsgSendAuthInfoRes).Add(IEIMSITag, encodeIMSI(imsi))
 
 	// Generate numVec auth tuples. Each EAP-AKA vector carries RAND, XRES,
 	// AUTN, CK, IK -- exactly what the GSUP 3G quintuplet needs. The 2G
-	// triplet (SRES, KC) is derived from CK/IK per 3GPP TS 55.205.
+	// triplet (SRES, KC) is derived per 3GPP TS 33.102 c2/c3.
 	for i := 0; i < numVec; i++ {
-		v, err := crypto.GenerateEAPAKAVector(auc, profile, s.store, ctx)
+		v, err := crypto.GenerateEAPAKAVector(vecAUC, profile, s.store, ctx)
 		if err != nil {
 			s.log.Error("gsup: AIR vector generation failed", zap.String("imsi", imsi), zap.Error(err))
 			sendError(p, MsgSendAuthInfoErr, imsi, CauseNetworkFailure)
@@ -97,9 +137,9 @@ func (s *Server) handleAIR(p *peer, msg *Msg) {
 		}
 
 		// 2G material for CSFB/GSM auth:
-		//   SRES = XRES[0:4]
+		//   SRES = c2(XRES)  (osmo_auth_c2 derivation function 1)
 		//   KC   = CK[0:8] XOR CK[8:16] XOR IK[0:8] XOR IK[8:16]  (3GPP TS 55.205)
-		sres := v.XRES[0:4]
+		sres := deriveSRES(v.XRES)
 		kc := derive2GKc(v.CK, v.IK)
 
 		tuple := NewMsg(0x00). // Builder reused for nested TLV encoding
@@ -126,6 +166,36 @@ func (s *Server) handleAIR(p *peer, msg *Msg) {
 		zap.String("peer", p.name),
 		zap.Int("vectors", numVec),
 	)
+}
+
+// deriveSRES derives the GSM SRES from a UMTS RES with c2 derivation
+// function 1 (libosmocore osmo_auth_c2): RES is zero-padded to 16 bytes
+// and its four 32-bit words are XORed together.
+func deriveSRES(res []byte) []byte {
+	var x [16]byte
+	copy(x[:], res)
+	sres := make([]byte, 4)
+	for i := 0; i < 4; i++ {
+		sres[i] = x[i] ^ x[4+i] ^ x[8+i] ^ x[12+i]
+	}
+	return sres
+}
+
+// withSeparationBit returns a copy of auc whose AMF has the separation bit
+// (the MSB of the first octet) set or cleared. The stored AUC is unchanged.
+func withSeparationBit(auc *models.AUC, set bool) (*models.AUC, error) {
+	amf, err := hex.DecodeString(auc.AMF)
+	if err != nil || len(amf) != 2 {
+		return nil, fmt.Errorf("AMF %q must be 2 hex-encoded bytes", auc.AMF)
+	}
+	if set {
+		amf[0] |= 0x80
+	} else {
+		amf[0] &^= 0x80
+	}
+	c := *auc
+	c.AMF = hex.EncodeToString(amf)
+	return &c, nil
 }
 
 // derive2GKc derives the GSM session key KC from Milenage CK and IK.

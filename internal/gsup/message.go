@@ -74,6 +74,16 @@ const (
 	CNDomainCS = 0x02
 )
 
+// RAT type values for IECurrentRATType (libosmocore enum osmo_rat_type)
+const (
+	RATGERANA    = 0x01
+	RATUTRANIu   = 0x02
+	RATEUTRANSGs = 0x03
+)
+
+// maxAuthVectors is OSMO_GSUP_MAX_NUM_AUTH_INFO.
+const maxAuthVectors = 5
+
 // GMM cause codes (3GPP TS 24.008 Table 10.5.147) used in error responses
 const (
 	CauseIMSIUnknown        = 0x02

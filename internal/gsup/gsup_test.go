@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/emakeev/milenage"
 	"go.uber.org/zap"
 
 	"github.com/svinson1121/vectorcore-hss/internal/config"
@@ -872,4 +873,133 @@ func TestGSUP_Derive2GKc(t *testing.T) {
 		}
 	}
 	t.Logf("KC = %x", kc)
+}
+
+// airTuples sends air and returns the decoded auth tuples.
+func airTuples(t *testing.T, conn net.Conn, air *Builder) []*Msg {
+	t.Helper()
+	clientWriteGSUP(t, conn, air.Bytes())
+	resp := clientReadGSUP(t, conn)
+	if resp.Type != MsgSendAuthInfoRes {
+		t.Fatalf("expected SendAuthInfoRes (0x%02X), got 0x%02X", MsgSendAuthInfoRes, resp.Type)
+	}
+	var out []*Msg
+	for i, tuple := range resp.GetAll(IEAuthTupleTag) {
+		inner, err := Decode(append([]byte{0x00}, tuple.Data...))
+		if err != nil {
+			t.Fatalf("tuple[%d] decode: %v", i, err)
+		}
+		out = append(out, inner)
+	}
+	return out
+}
+
+// TestGSUP_DeriveSRES checks c2 derivation function 1 against TS 35.208
+// Test Set 1 (RES a54211d5e3ba50bf) and that SRES is not RES[0:4].
+func TestGSUP_DeriveSRES(t *testing.T) {
+	res, _ := hex.DecodeString("a54211d5e3ba50bf")
+	if got := hex.EncodeToString(deriveSRES(res)); got != "46f8416a" {
+		t.Fatalf("SRES: got %s, want 46f8416a", got)
+	}
+}
+
+// TestGSUP_SendAuthInfo_SRESMatchesXRES checks every tuple's SRES is c2(XRES).
+func TestGSUP_SendAuthInfo_SRESMatchesXRES(t *testing.T) {
+	conn := dialHandshake(t, newTestServer(t))
+	for i, tup := range airTuples(t, conn, NewMsg(MsgSendAuthInfoReq).Add(IEIMSITag, encodeIMSI(testIMSI))) {
+		want := deriveSRES(tup.Get(IEXRESTag).Data)
+		if got := tup.Get(IESRESTag).Data; !bytes.Equal(got, want) {
+			t.Errorf("tuple[%d] SRES %x, want c2(XRES) %x", i, got, want)
+		}
+	}
+}
+
+// TestGSUP_SendAuthInfo_DefaultVectors checks the osmo-hlr default of 5
+// vectors when NUM_VECTORS_REQ is absent or out of range.
+func TestGSUP_SendAuthInfo_DefaultVectors(t *testing.T) {
+	conn := dialHandshake(t, newTestServer(t))
+	if n := len(airTuples(t, conn, NewMsg(MsgSendAuthInfoReq).Add(IEIMSITag, encodeIMSI(testIMSI)))); n != 5 {
+		t.Errorf("no NUM_VECTORS_REQ: got %d tuples, want 5", n)
+	}
+	air := NewMsg(MsgSendAuthInfoReq).Add(IEIMSITag, encodeIMSI(testIMSI)).AddByte(IENumberOfRequestedVec, 9)
+	if n := len(airTuples(t, conn, air)); n != 5 {
+		t.Errorf("NUM_VECTORS_REQ=9: got %d tuples, want 5", n)
+	}
+}
+
+// TestGSUP_SendAuthInfo_SeparationBit checks AUTN's AMF (octets 6-7): the
+// separation bit is set only for CURRENT_RAT_TYPE = EUTRAN_SGS. The test
+// AUC stores AMF 8000, so the bit must also be cleared for other RATs.
+func TestGSUP_SendAuthInfo_SeparationBit(t *testing.T) {
+	conn := dialHandshake(t, newTestServer(t))
+	for _, c := range []struct {
+		name string
+		rat  int
+		want byte
+	}{
+		{"no RAT", -1, 0x00},
+		{"GERAN", RATGERANA, 0x00},
+		{"UTRAN", RATUTRANIu, 0x00},
+		{"EUTRAN_SGS", RATEUTRANSGs, 0x80},
+	} {
+		air := NewMsg(MsgSendAuthInfoReq).Add(IEIMSITag, encodeIMSI(testIMSI)).AddByte(IENumberOfRequestedVec, 1)
+		if c.rat >= 0 {
+			air.AddByte(IECurrentRATType, byte(c.rat))
+		}
+		autn := airTuples(t, conn, air)[0].Get(IEAUTNTag).Data
+		if autn[6] != c.want || autn[7] != 0x00 {
+			t.Errorf("%s: AUTN AMF %x, want %02x00", c.name, autn[6:8], c.want)
+		}
+	}
+}
+
+// TestGSUP_SendAuthInfo_Resync builds the SIM's AUTS for SQN_MS and checks
+// the HSS moves the SQN past it before generating the new vectors.
+func TestGSUP_SendAuthInfo_Resync(t *testing.T) {
+	var store *mockStore
+	conn := dialHandshake(t, newTestServer(t, func(s *Server) { store = s.store.(*mockStore) }))
+
+	ki, _ := hex.DecodeString(store.auc.Ki)
+	opc, _ := hex.DecodeString(store.auc.OPc)
+	rand := bytes.Repeat([]byte{0x5a}, 16)
+	const sqnMS = uint64(0x1000)
+	sqnB := []byte{0, 0, 0, 0, 0x10, 0x00}
+	akStar, err := milenage.F5Star(ki, rand, opc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, macS, err := milenage.F1(ki, sqnB, rand, opc, []byte{0, 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	auts := make([]byte, 0, 14)
+	for i := range sqnB {
+		auts = append(auts, sqnB[i]^akStar[i])
+	}
+	auts = append(auts, macS...)
+
+	air := NewMsg(MsgSendAuthInfoReq).
+		Add(IEIMSITag, encodeIMSI(testIMSI)).
+		Add(IERANDTag, rand).
+		Add(IEAUTSTag, auts).
+		AddByte(IENumberOfRequestedVec, 2)
+	if n := len(airTuples(t, conn, air)); n != 2 {
+		t.Fatalf("got %d tuples, want 2", n)
+	}
+	if want := int64(sqnMS) + 100 + 2*32; store.auc.SQN != want {
+		t.Errorf("SQN after resync: got %d, want %d", store.auc.SQN, want)
+	}
+}
+
+// TestGSUP_SendAuthInfo_BadResync rejects a truncated AUTS.
+func TestGSUP_SendAuthInfo_BadResync(t *testing.T) {
+	conn := dialHandshake(t, newTestServer(t))
+	air := NewMsg(MsgSendAuthInfoReq).
+		Add(IEIMSITag, encodeIMSI(testIMSI)).
+		Add(IERANDTag, make([]byte, 16)).
+		Add(IEAUTSTag, make([]byte, 10))
+	clientWriteGSUP(t, conn, air.Bytes())
+	if resp := clientReadGSUP(t, conn); resp.Type != MsgSendAuthInfoErr {
+		t.Fatalf("expected SendAuthInfoErr, got 0x%02X", resp.Type)
+	}
 }
