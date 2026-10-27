@@ -214,19 +214,19 @@ func ResyncSQNFull(auc *models.AUC, profile *models.AlgorithmProfile, resyncInfo
 		return ResyncCustom(ki, opc, resyncInfo, pc)
 	}
 
-	amf, err := hex.DecodeString(auc.AMF)
-	if err != nil {
-		return 0, err
-	}
-	cipher, err := milenage.NewCipher(amf)
+	// f1* takes a dummy AMF of 0000 (TS 33.102 6.3.3), not the subscriber's.
+	cipher, err := milenage.NewCipher([]byte{0x00, 0x00})
 	if err != nil {
 		return 0, err
 	}
 	rand := resyncInfo[:16]
 	auts := resyncInfo[16:]
-	sqn, _, err := cipher.GenerateResync(auts, ki, opc, rand)
+	sqn, macS, err := cipher.GenerateResync(auts, ki, opc, rand)
 	if err != nil {
 		return 0, err
+	}
+	if !hmac.Equal(macS[:], auts[6:14]) {
+		return 0, fmt.Errorf("milenage resync: MAC-S verification failed")
 	}
 	return int64(sqn), nil
 }
